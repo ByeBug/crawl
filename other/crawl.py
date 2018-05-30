@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+"""
+爬取天眼查和企查查，储存为一个文件
+"""
 
 import re, time, json
 import requests
