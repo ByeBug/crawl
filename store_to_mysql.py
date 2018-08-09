@@ -7,9 +7,14 @@ Created on Tue May 22 17:56:34 2018
 将json文件存入mysql
 """
 
+import configparser
+import datetime
 import glob
-import json
 import hashlib
+import json
+import os
+import re
+
 import pymysql
 
 
@@ -21,10 +26,12 @@ def store_listed_company(data, cursor, conn):
     print('storing', data['companyName'])
 
     # 客户表 c_client
-    c_id = hashlib.md5(data['companyName'].encode('utf-8')).hexdigest()
-    name = data['companyName']  # 公司名称以企查查为准
+    pure_name = re.sub(r'\W', '', data['companyName'])  # 去除括号、空格、连字符等非数字字母下划线字符
+    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+    name = data['companyName'].replace('（', '(').replace('）', ')')  # 公司名称以企查查为准 替换为英文括号
     state = data['baseInfo']['company_status']
     uscc = data['baseInfo']['credit_code']
+    organ_num = data['baseInfo']['organization_num']
     enterprise_type = data['baseInfo']['company_type']
     deadline_begin = data['baseInfo']['business_limitation']
     deadline_end = data['baseInfo']['business_limitation']
@@ -32,6 +39,7 @@ def store_listed_company(data, cursor, conn):
 
     engl_name = eastmoney_data['survey']['base_info']['ywmc']
     used_name = eastmoney_data['survey']['base_info']['cym']
+    is_listed = 1
     a_code = eastmoney_data['survey']['base_info']['agdm']
     a_name = eastmoney_data['survey']['base_info']['agjc']
     b_code = eastmoney_data['survey']['base_info']['bgdm']
@@ -58,16 +66,14 @@ def store_listed_company(data, cursor, conn):
     accounting_office = eastmoney_data['survey']['base_info']['kjssws']
     abstract = eastmoney_data['survey']['base_info']['gsjj'].strip()
 
-    sql = """insert into c_client (c_id, name, engl_name, used_name, a_code, a_name, b_code, b_name, h_code, h_name, state, 
-    uscc, enterprise_type, legal_name, money, estab_time, deadline_begin, deadline_end, reg_office, reg_address, busin_scope, 
-    sfc, phone, email, fax, url, off_address, region, postal_code, employee, management, law_office, accounting_office, abstract)
-    values ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', 
-    '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')""".format(c_id, name, engl_name, 
-        used_name, a_code, a_name, b_code, b_name, h_code, h_name, state, uscc, enterprise_type, legal_name, money, estab_time, 
-        deadline_begin, deadline_end, reg_office, reg_address, busin_scope, sfc, phone, email, fax, url, off_address, region, 
-        postal_code, employee, management, law_office, accounting_office, abstract)
+    sql = """insert into c_client (c_id, name, engl_name, used_name, is_listed, a_code, a_name, b_code, b_name, h_code, h_name, state, 
+        uscc, organ_num, enterprise_type, legal_name, money, estab_time, deadline_begin, deadline_end, reg_office, reg_address, busin_scope, 
+        sfc, phone, email, fax, url, off_address, region, postal_code, employee, management, law_office, accounting_office, abstract)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
-    cursor.execute(sql)
+    cursor.execute(sql, (c_id, name, engl_name,used_name, is_listed, a_code, a_name, b_code, b_name, h_code, h_name, state, uscc, organ_num, enterprise_type, 
+        legal_name, money, estab_time, deadline_begin, deadline_end, reg_office, reg_address, busin_scope, sfc, phone, email, fax, url, 
+        off_address, region, postal_code, employee, management, law_office, accounting_office, abstract))
 
     # 十大股东表 c_top_shaholder
     top10_holders = []
@@ -76,16 +82,17 @@ def store_listed_company(data, cursor, conn):
         id_holder = 0
         for holder in holders['sdgd']:
             id_holder += 1
+            pure_name = re.sub(r'\W', '', holder['gdmc']) 
+            shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
             shaholder_name = holder['gdmc']
             number = holder['cgs']
             rate = holder['zltgbcgbl']
             shares_type = holder['gflx']
 
-            top10_holders.append(
-                (c_id, deadline, id_holder, shaholder_name, number, rate, shares_type))
+            top10_holders.append((c_id, deadline, id_holder, shaholder_id, shaholder_name, number, rate, shares_type))
 
-    sql = """insert into c_top_shaholder (c_id, deadline, id, shaholder_name, number, rate, shares_type)
-        values (%s, %s, %s, %s, %s, %s, %s)"""
+    sql = """insert into c_top_shaholder (c_id, deadline, id, shaholder_id, shaholder_name, number, rate, shares_type)
+        values (%s, %s, %s, %s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, top10_holders)
 
@@ -96,16 +103,18 @@ def store_listed_company(data, cursor, conn):
         id_holder = 0
         for holder in holders['sdltgd']:
             id_holder += 1
+            pure_name = re.sub(r'\W', '', holder['gdmc']) 
+            shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
             shaholder_name = holder['gdmc']
             number = holder['cgs']
             rate = holder['zltgbcgbl']
             shares_type = holder['gflx']
             shaholder_type = holder['gdxz']
 
-            top10_lt_holders.append((c_id, deadline, id_holder, shaholder_name, number, rate, shares_type, shaholder_type))
+            top10_lt_holders.append((c_id, deadline, id_holder, shaholder_id, shaholder_name, number, rate, shares_type, shaholder_type))
 
-    sql = """insert into c_ltop_shaholder (c_id, deadline, id, shaholder_name, number, rate, shares_type, shaholder_type)
-        values (%s, %s, %s, %s, %s, %s, %s, %s)"""
+    sql = """insert into c_ltop_shaholder (c_id, deadline, id, shaholder_id, shaholder_name, number, rate, shares_type, shaholder_type)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, top10_lt_holders)
 
@@ -167,17 +176,16 @@ def store_listed_company(data, cursor, conn):
     # 对外投资表 c_investment
     investments = []
     for investment in data['investments']:
-        # 在客户表新增一条数据？
-        i_id = ''
-        name = investment['company_name']
+        pure_name = re.sub(r'\W', '', investment['name'])
+        i_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+        name = investment['name']
         capital = investment['registered_capital']
         count = ''
         rate = investment['invest_proportion']
         time = investment['registered_time']
         type_i = investment['company_status']
 
-        investments.append(
-            (c_id, i_id, name, capital, count, rate, time, type_i))
+        investments.append((c_id, i_id, name, capital, count, rate, time, type_i))
 
     sql = """insert into c_investment (c_id, i_id, name, capital, count, rate, time, type)
     values (%s, %s, %s, %s, %s, %s, %s, %s)"""
@@ -192,7 +200,8 @@ def store_listed_company(data, cursor, conn):
     client_managers = []
     for manager in eastmoney_data['managers']:
         e_id = ''
-        name = manager['name']
+        c_name = data['companyName']
+        e_name = manager['name']
         age = manager['age']
         gender = manager['sex']
         education = manager['education']
@@ -200,16 +209,16 @@ def store_listed_company(data, cursor, conn):
         post = manager['position']
         serve_begin = manager['start_date']
 
-        managers.append((e_id, name, age, gender, education, abstract))
-        client_managers.append((c_id, e_id, post, serve_begin))
+        managers.append((e_id, c_id, c_name, e_name, age, gender, education, abstract))
+        client_managers.append((c_id, e_id, e_name, post, serve_begin))
 
-    sql = """insert into e_executive (e_id, name, age, gender, education, abstract)
-    values (%s, %s, %s, %s, %s, %s)"""
+    sql = """insert into e_executive (e_id, c_id, c_name, e_name, age, gender, education, abstract)
+    values (%s, %s, %s, %s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, managers)
 
-    sql = """insert into client_executive (c_id, e_id, post, serve_begin)
-    values (%s, %s, %s, %s)"""
+    sql = """insert into client_executive (c_id, e_id, e_name, post, serve_begin)
+    values (%s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, client_managers)
 
@@ -252,13 +261,36 @@ def store_listed_company(data, cursor, conn):
                          face_value, issue_count, issue_price, issue_cost, issue_tot_market, raise_funds, open_price, end_price,
                          turnover_rate, max_price, under_rate, price_rate, lead_underwriter, recommender, institution))
 
+    # 股票融资表 shares_financing
+    s_id = eastmoney_data['code']
+    s_name = eastmoney_data['name']
+    issue_type = cninfo_data['issue_type']
+    issue_begin = cninfo_data['issue_begin']
+    issue_nature = cninfo_data['issue_nature']
+    issue_shares_type = cninfo_data['issue_shares_type']
+    issue_way = cninfo_data['issue_way']
+    issue_count = cninfo_data['issue_count']
+    issue_rmb_price = cninfo_data['issue_rmb_price']
+    issue_fore_price = cninfo_data['issue_fore_price']
+    fact_raise_funds = cninfo_data['fact_raise_funds']
+    fact_issue_cost = cninfo_data['fact_issue_cost']
+    issue_rate = cninfo_data['issue_rate']
+    online_rate = cninfo_data['online_rate']
+    two_grade_rate = cninfo_data['two_grade_rate']
+
+    sql = """insert into shares_financing
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+
+    cursor.execute(sql, (s_id, s_name, issue_type, issue_begin, issue_nature, issue_shares_type, issue_way, issue_count,
+                         issue_rmb_price, issue_fore_price, fact_raise_funds, fact_issue_cost, issue_rate, online_rate, two_grade_rate))
+
     # B股信息
     if eastmoney_data['b_stock_info']:
-        cninfo_file = 'json/cninfo/' + \
-            eastmoney_data['b_stock_info']['code'] + '.json'
+        cninfo_file = 'json/cninfo/' + eastmoney_data['b_stock_info']['code'] + '.json'
         with open(cninfo_file, 'r', encoding='utf-8') as f:
             cninfo_data = json.load(f)
 
+        # 股票信息表 shares
         s_id = eastmoney_data['b_stock_info']['code']
         s_name = eastmoney_data['b_stock_info']['name']
         security_type = eastmoney_data['b_stock_info']['stock_type']
@@ -293,8 +325,31 @@ def store_listed_company(data, cursor, conn):
                              face_value, issue_count, issue_price, issue_cost, issue_tot_market, raise_funds, open_price, end_price,
                              turnover_rate, max_price, under_rate, price_rate, lead_underwriter, recommender, institution))
 
+        # 股票融资表 shares_financing
+        s_id = eastmoney_data['b_stock_info']['code']
+        s_name = eastmoney_data['b_stock_info']['name']
+        issue_type = cninfo_data['issue_type']
+        issue_begin = cninfo_data['issue_begin']
+        issue_nature = cninfo_data['issue_nature']
+        issue_shares_type = cninfo_data['issue_shares_type']
+        issue_way = cninfo_data['issue_way']
+        issue_count = cninfo_data['issue_count']
+        issue_rmb_price = cninfo_data['issue_rmb_price']
+        issue_fore_price = cninfo_data['issue_fore_price']
+        fact_raise_funds = cninfo_data['fact_raise_funds']
+        fact_issue_cost = cninfo_data['fact_issue_cost']
+        issue_rate = cninfo_data['issue_rate']
+        online_rate = cninfo_data['online_rate']
+        two_grade_rate = cninfo_data['two_grade_rate']
+
+        sql = """insert into shares_financing
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+
+        cursor.execute(sql, (s_id, s_name, issue_type, issue_begin, issue_nature, issue_shares_type, issue_way, issue_count,
+                             issue_rmb_price, issue_fore_price, fact_raise_funds, fact_issue_cost, issue_rate, online_rate, two_grade_rate))
+
     short_name = eastmoney_data['name']
-    b_id = eastmoney_data['name']
+    b_id = eastmoney_data['code']
 
     # 资产负债表 fin_balance
     balance_sheets = []
@@ -577,16 +632,16 @@ def store_listed_company(data, cursor, conn):
         cash_equi_begin = c_f_s['CASHEQUIBEGINNING']
         cash_equi_end = c_f_s['CASHEQUIENDING']
 
-        cash_flow_statements.append((c_id, report_date, short_name, b_id, statement_type, repote_type, sale_goods_service_rec, ni_deposit, 
-                                     ni__borrow_f_cent_bank, ni__borrow_f_fin_institution, perm_rec, net_rein_rec, ni_insured_deposit_inv, 
-                                     ni_disposit_tran_fin_ass, interest_auxiliary_comm_rec, ni_borrow_fund, nd_loan_advance, ni_buy_back_fund, 
-                                     tax_return_rec, other_operate_rec, sum_operate_flow_in, buy_goods_service_pay, ni_lloan_advance, 
-                                     ni_deposit_centl_bank, indemnity_pay, interest_auxiliary_comm_pay, dividend_pay, employee_pay, tax_pay, 
-                                     other_operate_pay, sum_operate_flow_out, net_operate_cash_flow, disposal_inv_rec, inv_income_rec, 
-                                     disposal_fixed_immaterial_ass_rec, disposal_sub_rec, reduce_pledge_get_deposit, other_inv_rec, sum_inv_folw_in, 
-                                     buy_fil_ass, inv_pay, ni_pledge_loan, get_sub_pay, add_pledge_deposit_pay, other_inv_pay, sum_inv_folw_out, 
-                                     net_inv_cash_flow, accept_inv_rec, sub_accept, loan_rec, issue_bond_rec, other_fin_rec, sum_fin_rec, 
-                                     repay_debt_pay, dividend_profit_or_interest_pay, sub_pay, buy_sub_pay, other_fin_pay, sunsidiary_reduct_capital, 
+        cash_flow_statements.append((c_id, report_date, short_name, b_id, statement_type, repote_type, sale_goods_service_rec, ni_deposit,
+                                     ni__borrow_f_cent_bank, ni__borrow_f_fin_institution, perm_rec, net_rein_rec, ni_insured_deposit_inv,
+                                     ni_disposit_tran_fin_ass, interest_auxiliary_comm_rec, ni_borrow_fund, nd_loan_advance, ni_buy_back_fund,
+                                     tax_return_rec, other_operate_rec, sum_operate_flow_in, buy_goods_service_pay, ni_lloan_advance,
+                                     ni_deposit_centl_bank, indemnity_pay, interest_auxiliary_comm_pay, dividend_pay, employee_pay, tax_pay,
+                                     other_operate_pay, sum_operate_flow_out, net_operate_cash_flow, disposal_inv_rec, inv_income_rec,
+                                     disposal_fixed_immaterial_ass_rec, disposal_sub_rec, reduce_pledge_get_deposit, other_inv_rec, sum_inv_folw_in,
+                                     buy_fil_ass, inv_pay, ni_pledge_loan, get_sub_pay, add_pledge_deposit_pay, other_inv_pay, sum_inv_folw_out,
+                                     net_inv_cash_flow, accept_inv_rec, sub_accept, loan_rec, issue_bond_rec, other_fin_rec, sum_fin_rec,
+                                     repay_debt_pay, dividend_profit_or_interest_pay, sub_pay, buy_sub_pay, other_fin_pay, sunsidiary_reduct_capital,
                                      sum_fin_flow_out, net_fin_cash_flow, effect_exchange_rate, ni_cash_equi, cash_equi_begin, cash_equi_end))
 
     sql = """insert into fin_cash_flow
@@ -604,10 +659,12 @@ def store_not_listed_company(data, cursor, conn):
     print('storing', data['companyName'])
 
     # 客户表 c_client
-    c_id = hashlib.md5(data['companyName'].encode('utf-8')).hexdigest()
-    name = data['companyName']
+    pure_name = re.sub(r'\W', '', data['companyName'])
+    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+    name = data['companyName'].replace('（', '(').replace('）', ')')
     engl_name = data['baseInfo']['english_name']
     used_name = data['baseInfo']['used_name']
+    is_listed = 0
     # 法人代表ID
     legal_name = data['baseInfo']['legal_person']
     money = data['baseInfo']['registered_capital']
@@ -623,42 +680,45 @@ def store_not_listed_company(data, cursor, conn):
     employee = data['baseInfo']['staff_size']
     state = data['baseInfo']['company_status']
     uscc = data['baseInfo']['credit_code']
+    organ_num = data['baseInfo']['organization_num']
     enterprise_type = data['baseInfo']['company_type']
     deadline_begin = data['baseInfo']['business_limitation']    # date
     deadline_end = data['baseInfo']['business_limitation']  # date
     reg_office = data['baseInfo']['registration_authority']
 
-    sql = """insert into c_client (c_id, name, engl_name, used_name, state, uscc, enterprise_type, legal_name, money, estab_time, 
+    sql = """insert into c_client (c_id, name, engl_name, used_name, is_listed, state, uscc, organ_num, enterprise_type, legal_name, money, estab_time, 
     deadline_begin, deadline_end, reg_office, reg_address, busin_scope, sfc, phone, email, url, off_address, region, employee)
-    values ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', 
-    '{}', '{}')""".format(c_id, name, engl_name, used_name, state, uscc, enterprise_type, legal_name, money, estab_time, deadline_begin, 
-        deadline_end, reg_office, reg_address, busin_scope, sfc, phone, email, url, off_address, region, employee)
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
-    cursor.execute(sql)
+    cursor.execute(sql, (c_id, name, engl_name, used_name, is_listed, state, uscc, organ_num, enterprise_type, legal_name, money, estab_time, deadline_begin,
+                         deadline_end, reg_office, reg_address, busin_scope, sfc, phone, email, url, off_address, region, employee))
 
     # 股东表 c_shaholder
     holders = []
     for holder in data['holders']:
-        time = holder['time']
+        time = datetime.date.today().isoformat()
+        pure_name = re.sub(r'\W', '', holder['name']) 
+        shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
         shaholder_name = holder['name']
-        shaholder_type = holder['type']
         invest_rate = holder['proportion']
         sub_funding = holder['amount']
+        sub_funding_date = holder['time']
+        r_p_funding = holder['r_p_amount']
+        r_p_funding_date = holder['r_p_time']
 
-        holders.append((c_id, time, shaholder_name,
-                        shaholder_type, invest_rate, sub_funding))
+        holders.append((c_id, time, shaholder_id, shaholder_name, invest_rate, sub_funding, sub_funding_date, r_p_funding, r_p_funding_date))
 
-    sql = """insert into c_shaholder (c_id, time, shaholder_name, shaholder_type, invest_rate, sub_funding)
-    values (%s, %s, %s, %s, %s, %s)"""
+    sql = """insert into c_shaholder (c_id, time, shaholder_id, shaholder_name, invest_rate, sub_funding, sub_funding_date, r_p_funding, r_p_funding_date)
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, holders)
 
     # 对外投资表 c_investment
     investments = []
     for investment in data['investments']:
-        # 在客户表新增一条数据？
-        i_id = ''
-        name = investment['company_name']
+        pure_name = re.sub(r'\W', '', investment['name'])
+        i_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+        name = investment['name']
         capital = investment['registered_capital']
         count = ''
         rate = investment['invest_proportion']
@@ -680,19 +740,20 @@ def store_not_listed_company(data, cursor, conn):
     client_managers = []
     for manager in data['managers']:
         e_id = ''
-        name = manager['name']
+        c_name = data['companyName']
+        e_name = manager['name']
         post = manager['position']
 
-        managers.append((e_id, name))
-        client_managers.append((c_id, e_id, post))
+        managers.append((e_id, c_id, c_name, e_name))
+        client_managers.append((c_id, e_id, e_name, post))
 
-    sql = """insert into e_executive (e_id, name)
-    values (%s, %s)"""
+    sql = """insert into e_executive (e_id, c_id, c_name, e_name)
+    values (%s, %s, %s, %s)"""
 
     cursor.executemany(sql, managers)
 
-    sql = """insert into client_executive (c_id, e_id, post)
-    values (%s, %s, %s)"""
+    sql = """insert into client_executive (c_id, e_id, e_name, post)
+    values (%s, %s, %s, %s)"""
 
     cursor.executemany(sql, client_managers)
 
@@ -701,36 +762,47 @@ def store_not_listed_company(data, cursor, conn):
     print('stored successfully')
 
 
-def store(qichacha_file):
-    conn = pymysql.connect(host='localhost', port=3306, user='root', passwd='root', db='financing_test', use_unicode=True, charset='utf8')
-    cursor = conn.cursor()
-
+def store(qichacha_file, conn, cursor):
     with open(qichacha_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    c_id = hashlib.md5(data['companyName'].encode('utf-8')).hexdigest()
+    pure_name = re.sub(r'\W', '', data['companyName'])
+    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
 
     sql = """select c_id from c_client where c_id='{}'""".format(c_id)
     cursor.execute(sql)
 
     if cursor.fetchone():
         print(data['companyName'], 'already in database')
-        cursor.close()
-        conn.close()
-        return
-
-    try:
-        if data['overview']['stock_code']:
-            store_listed_company(data, cursor, conn)
-        else:
-            store_not_listed_company(data, cursor, conn)
-    except pymysql.DatabaseError as e:
-        conn.rollback()
-        raise e
-
-    cursor.close()
-    conn.close()
+    else:
+        try:
+            if data['overview']['stock_code']:
+                store_listed_company(data, cursor, conn)
+            else:
+                store_not_listed_company(data, cursor, conn)
+        except pymysql.DatabaseError as e:
+            conn.rollback()
+            raise e
 
 
 if __name__ == '__main__':
-    store('./json/qichacha/渤海金控投资股份有限公司.json')
+    config = configparser.RawConfigParser()
+    config.read('config.cfg', encoding='utf-8')
+
+    store_db_host = config['store_db']['host']
+    store_db_port = config['store_db']['port']
+    store_db_user = config['store_db']['user']
+    store_db_passwd = config['store_db']['passwd']
+    store_db_db = config['store_db']['db']
+    conn = pymysql.connect(host=store_db_host, port=store_db_port, 
+                            user=store_db_user, passwd=store_db_passwd, 
+                            db=store_db_db, charset='utf8')
+    cursor = conn.cursor()
+
+    path = config['crawl']['save_path']
+    path = os.path.join(path, 'json/qichacha')
+
+    store(os.path.join(path, '渤海金控投资股份有限公司.json'), conn, cursor)
+
+    cursor.close()
+    conn.close()

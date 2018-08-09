@@ -4,8 +4,8 @@
 分别保存为json文件
 """
 
-from spiders.crawl_cninfo import crawl_from_cninfo
 from spiders.crawl_eastmoney import crawl_from_eastmoney
+from spiders.crawl_cninfo import crawl_from_cninfo
 
 
 def crawl_stock(code):

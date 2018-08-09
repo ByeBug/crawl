@@ -2,45 +2,58 @@
 """
 Created on Tue May 22 17:56:34 2018
 
-@author: storm
+@author: zhao
 
-多线程爬取主程序
+多线程爬取主程序 v2.0
+数据库中保存层级
+股东爬两层，投资爬六层
 """
 
+
 import logging
+import os
 import queue
 import random
 import re
-import sqlite3
 import threading
 import time
+import datetime
+import configparser
 
-from spiders.crawl_qichacha2 import NeedValidationError, crawl_from_qichacha
-from spiders.crawl_cninfo import crawl_from_cninfo
-from spiders.crawl_eastmoney import crawl_from_eastmoney
+import pymysql
 
+from spiders.crawl_qichacha import NeedValidationError, crawl_from_qichacha
+from spiders.crawl_stock import crawl_stock
+
+
+config = configparser.RawConfigParser()
+config.read('config.cfg', encoding='utf-8')
+
+log_path = config['crawl']['log_path']
+log_path = os.path.join(log_path, str(datetime.date.today()))
+if not os.path.isdir(log_path):
+    os.makedirs(log_path)
 
 logger1 = logging.getLogger('logger1')
 logger1.setLevel(logging.INFO)
-handler1 = logging.FileHandler('crawl_log.log', mode='w', encoding='utf-8')
+stream_handler = logging.StreamHandler()
+handler1 = logging.FileHandler(os.path.join(log_path, 'crawl_log.log'), mode='w', encoding='utf-8')
+handler2 = logging.FileHandler(os.path.join(log_path, 'error_log.log'), mode='w', encoding='utf-8')
 formatter = logging.Formatter('%(asctime)s - %(message)s', '%H:%M:%S')
 handler1.setFormatter(formatter)
-stream_handler = logging.StreamHandler()
-logger1.addHandler(handler1)
+handler2.setFormatter(formatter)
+handler2.setLevel(logging.ERROR)
 logger1.addHandler(stream_handler)
+logger1.addHandler(handler1)
+logger1.addHandler(handler2)
 
-conn = sqlite3.connect('d:/firm_unique_qichacha.db', check_same_thread=False)
+crawl_db_user = config['crawl_db']['user']
+crawl_db_passwd = config['crawl_db']['passwd']
+crawl_db_db = config['crawl_db']['db']
+conn = pymysql.connect(host='localhost', port=3306,
+                       user=crawl_db_user, passwd=crawl_db_passwd,
+                       db=crawl_db_db, charset='utf8')
 cursor = conn.cursor()
-
-if not cursor.execute("select * from sqlite_master where type='table' and name='firm_unique';").fetchone():
-    cursor.execute("""create table firm_unique(
-        firm_name text,
-        firm_unique text primary key,
-        need_crawl text,
-        has_error text);""")
-    conn.commit()
-
-company_list = ['海航集团有限公司']
 
 wait_crawl_q = queue.Queue()
 wait_write_q = queue.Queue()
@@ -51,79 +64,61 @@ need_validate = False
 single_time_crawled = 0
 
 
-def crawl_stock(code):
+def crawl_stock_wrapper(code):
     try:
-        e = crawl_from_eastmoney(code)
-
-        if e['b_stock_info']:
-            crawl_from_cninfo(e['b_stock_info']['code'])
-
-        crawl_from_cninfo(code)
+        crawl_stock(code)
     except Exception as e:
         logger1.exception(e)
         logger1.error('crawl stock {} error'.format(code))
 
 
-
 class ReadThread(threading.Thread):
-    def __init__(self, cursor, company_list, wait_crawl_q, db_semaphore):
+    def __init__(self, cursor, wait_crawl_q, db_semaphore):
         super().__init__()
         self.cursor = cursor
-        self.company_list = company_list
         self.wait_crawl_q = wait_crawl_q
         self.db_semaphore = db_semaphore
 
     def run(self):
-        # 公司列表存入队列
-        for item in self.company_list:
-            sql = "select * from firm_unique where firm_name='%s' and need_crawl=0" % item
-            self.cursor.execute(sql)
-            if self.cursor.fetchone():
-                continue
-
-            name = item
-            unique = ''
-
-            self.wait_crawl_q.put((name, unique))
-            logger1.info('-----ReadThread put (%s) from list to wait_crawl_q' % name)
-
-        self.wait_crawl_q.join()
+        # 爬取有效期为 30 天
+        limit_date = datetime.date.today() - datetime.timedelta(days=30)
 
         while 1:
             time.sleep(2)
-            sql = 'select * from firm_unique where need_crawl=1 and has_error=0'
-            logger1.info('-----ReadThread acquiring db')
+            sql = """select `unique`, `name`, `level` from crawl 
+                where crawled_date < %s
+                order by level limit 100"""
             self.db_semaphore.acquire()
-            self.cursor.execute(sql)
+            self.cursor.execute(sql, (limit_date, ))
             result = self.cursor.fetchall()
             self.db_semaphore.release()
-            logger1.info('-----ReadThread release db')
-            if result:
-                logger1.info('-----ReadThread get {} rows from database'.format(len(result)))
-                for row in result:
-                    name = row[0]
-                    unique = row[1]
 
-                    self.wait_crawl_q.put((name, unique))
+            if result:
+                for row in result:
+                    unique = row[0]
+                    name = row[1]
+                    level = row[2]
+
+                    self.wait_crawl_q.put((unique, name, level))
 
                 logger1.info('----- ReadThread blocking')
                 self.wait_crawl_q.join()
+
                 logger1.info('----- ReadThread Wake up')
                 if need_validate:
                     logger1.info('-----ReadThread: Need validate')
                     logger1.info('-----ReadThread end-----')
                     return
             else:
-                # read_thread_end = True
-                logger1.info('-----ReadThread: No data in database')
+                logger1.info('-----ReadThread: No data need crawl in database')
                 logger1.info('-----ReadThread end-----')
                 return
 
 
 class CrawlThread(threading.Thread):
-    def __init__(self, name, wait_crawl_q, wait_write_q):
+    def __init__(self, thread_name, wait_crawl_q, wait_write_q):
         super().__init__()
-        self.name = name
+        self.thread_name = thread_name
         self.wait_crawl_q = wait_crawl_q
         self.wait_write_q = wait_write_q
 
@@ -132,50 +127,61 @@ class CrawlThread(threading.Thread):
 
         while 1:
             try:
-                # 等待15s
                 # 若待爬队列15s无数据
-                name, unique = self.wait_crawl_q.get(timeout=15)
-                # logger.info('+++++{} get ({}, {}) from wait_crawl_q'.format(self.name, name, unique))
-                if unique:
-                    url = 'https://www.qichacha.com/firm_' + unique + '.html'
-                else:
-                    url = ''
+                unique, name, level = self.wait_crawl_q.get(timeout=15)
+
+                url = 'https://www.qichacha.com/firm_' + unique + '.html'
 
                 # 暂时不使用代理
                 proxy = None
 
                 # 加入延时
-                time.sleep(random.uniform(2, 3))
+                time.sleep(random.uniform(1, 2))
 
                 try:
                     qichacha = crawl_from_qichacha(name, url, proxy)
+
+                # 出现验证错误
                 except NeedValidationError as e:
-                    wait_write_q_item = (name, unique, 1, 0)
-                    self.wait_write_q.put(wait_write_q_item)
-                    logger1.info('+++++{} put ({}, {}, {}, {}) into wait_write_q, remain: {}'.format(self.name, *wait_write_q_item, self.wait_crawl_q.qsize()))
+                    # 等待两秒后重试
+                    time.sleep(2)
 
-                    self.wait_crawl_q.task_done()
+                    try:
+                        qichacha = crawl_from_qichacha(name, url, proxy)
+                    except NeedValidationError as e:
+                        # 若需要验证，则该公司不需要加入待写队列
 
-                    need_validate = True
+                        self.wait_crawl_q.task_done()
 
-                    logger1.error('===!!{} get Need Validation Error, clearing q, qsize: {}, unfinished: {}'.format(self.name, self.wait_crawl_q.qsize(), self.wait_crawl_q.unfinished_tasks))
-                    while not self.wait_crawl_q.empty():
-                        try:
-                            self.wait_crawl_q.get_nowait()
-                            self.wait_crawl_q.task_done()
-                        except queue.Empty:
-                            logger1.error('!!!!!{} get Empty Error when clear q'.format(self.name))
-                    logger1.error('===!!{} clear q finished, qsize: {}, unfinished: {}'.format(self.name, self.wait_crawl_q.qsize(), self.wait_crawl_q.unfinished_tasks))
+                        need_validate = True
 
-                    continue
+                        # 清空待爬队列
+                        logger1.error('===!!{} get Need Validation Error, clearing wait_crawl_q'.format(self.thread_name))
+                        while not self.wait_crawl_q.empty():
+                            try:
+                                self.wait_crawl_q.get_nowait()
+                                self.wait_crawl_q.task_done()
+                            except queue.Empty:
+                                logger1.error('!!!!!{} get Empty Error when clear wait_crawl_q'.format(self.thread_name))
+                        logger1.error('===!!{} clear wait_crawl_q finished'.format(self.thread_name))
 
+                        continue
+                
+                # 爬虫出现错误
                 except Exception as e:
+                    logger1.error('!!!!!{} crawl ({}, {}) error!!!!!'.format(self.thread_name, name, url))
                     logger1.exception(e)
-                    logger1.error('!!!!!{} crawl ({}, {}) error!!!!!'.format(self.name, name, url))
 
-                    wait_write_q_item = (name, unique, 0, 1)
+                    # 加入待写队列的item分为两类
+                    # 一类 flag = 0，表示需要更新该记录的 crawled_date, has_error
+                    # 一类 flag = 1，表示需要插入该记录的 unique, name, level
+
+                    # 更新该公司的 crawled_date 和 has_error
+                    flag = 0
+                    crawled_date = datetime.date.today()
+                    has_error = 1
+                    wait_write_q_item = (flag, unique, name, level, crawled_date, has_error)
                     self.wait_write_q.put(wait_write_q_item)
-                    logger1.info('+++++{} put ({}, {}, {}, {}) into wait_write_q, remain: {}'.format(self.name, *wait_write_q_item, self.wait_crawl_q.qsize()))
 
                     self.wait_crawl_q.task_done()
 
@@ -183,46 +189,102 @@ class CrawlThread(threading.Thread):
 
                     continue
 
+                # 没有错误
                 else:
-                    if not unique:
-                        url = qichacha['url']
-                        unique = re.search(r'firm_(\w+).html', url).group(1)
+                    logger1.info('+++++{} crawled ({})'.format(self.thread_name, name))
 
-                    logger1.info('+++++{} crawled ({})'.format(self.name, name))
-
-                    wait_write_q_item = (name, unique, 0, 0)
+                    # 更新该公司的 crawled_date 和 has_error
+                    flag = 0
+                    crawled_date = datetime.date.today()
+                    has_error = 0
+                    wait_write_q_item = (flag, unique, name, level, crawled_date, has_error)
                     self.wait_write_q.put(wait_write_q_item)
-                    logger1.info('+++++{} put ({}, {}, {}, {}) into wait_write_q, remain: {}'.format(self.name, *wait_write_q_item, self.wait_crawl_q.qsize()))
 
+                    # 若有股票代码则爬取股票信息
                     if qichacha['overview']['stock_code']:
-                        crawl_stock_thread = threading.Thread(target=crawl_stock, args=(qichacha['overview']['stock_code'], ), name='crawl-stock-thread')
+                        crawl_stock_thread = threading.Thread(target=crawl_stock_wrapper, args=(qichacha['overview']['stock_code'], ), name='crawl-stock-thread')
                         crawl_stock_thread.start()
 
-                    for holder in qichacha['holders']:
-                        unique = re.search(r'firm_(\w+).html', holder['url'])
-                        if not unique:
-                            continue
-                        unique = unique.group(1)
-                        name = holder['name']
-                        wait_write_q_item = (name, unique, 1, 0)
-                        self.wait_write_q.put(wait_write_q_item)
+                    # 根据该公司 level 将 holders 或 investments 加入待写队列
 
-                    for investment in qichacha['investments']:
-                        unique = re.search(r'firm_(\w+).html', investment['url'])
-                        if not unique:
-                            continue
-                        unique = unique.group(1)
-                        name = investment['company_name']
-                        wait_write_q_item = (name, unique, 1, 0)
-                        self.wait_write_q.put(wait_write_q_item)
-                        
-                    self.wait_crawl_q.task_done()
+                    # level = 0，根公司，将 holders 和 investments 加入待写队列
+                    if level == 0:
+                        for holder in qichacha['holders']:
+                            new_unique = re.search(r'firm_(\w+).html', holder['url'])
+                            if not new_unique:
+                                continue
+                            
+                            # 插入股东信息
+                            flag = 1
+                            new_unique = new_unique.group(1)
+                            new_name = holder['name']
+                            new_level = level - 1
+                            new_crawled_date = '2000-01-01'
+                            new_has_error = ''
+                            wait_write_q_item = (flag, new_unique, new_name, new_level, new_crawled_date, new_has_error)
+                            self.wait_write_q.put(wait_write_q_item)
 
-                    single_time_crawled += 1
+                        for investment in qichacha['investments']:
+                            new_unique = re.search(r'firm_(\w+).html', investment['url'])
+                            if not new_unique:
+                                continue
+
+                            # 插入投资信息
+                            flag = 1
+                            new_unique = new_unique.group(1)
+                            new_name = investment['name']
+                            new_level = level + 1
+                            new_crawled_date = '2000-01-01'
+                            new_has_error = ''
+                            wait_write_q_item = (flag, new_unique, new_name, new_level, new_crawled_date, new_has_error)
+                            self.wait_write_q.put(wait_write_q_item)
+
+                    # -2 < level < 0，将 holders 加入待写队列
+                    elif -2 < level < 0:
+                        for holder in qichacha['holders']:
+                            new_unique = re.search(r'firm_(\w+).html', holder['url'])
+                            if not new_unique:
+                                continue
+                            
+                            # 插入股东信息
+                            flag = 1
+                            new_unique = new_unique.group(1)
+                            new_name = holder['name']
+                            new_level = level - 1
+                            new_crawled_date = '2000-01-01'
+                            new_has_error = ''
+                            wait_write_q_item = (flag, new_unique, new_name, new_level, new_crawled_date, new_has_error)
+                            self.wait_write_q.put(wait_write_q_item)
+
+                    # 0 < level < 6，将 investments 加入待写队列
+                    elif 0 < level < 6:
+                        for investment in qichacha['investments']:
+                            new_unique = re.search(r'firm_(\w+).html', investment['url'])
+                            if not new_unique:
+                                continue
+
+                            # 插入投资信息
+                            flag = 1
+                            new_unique = new_unique.group(1)
+                            new_name = investment['name']
+                            new_level = level + 1
+                            new_crawled_date = '2000-01-01'
+                            new_has_error = ''
+                            wait_write_q_item = (flag, new_unique, new_name, new_level, new_crawled_date, new_has_error)
+                            self.wait_write_q.put(wait_write_q_item)
+
+                    # level = -2 或 level = 6，只将自身加入待写队列
+                    elif level == -2 or level == 6:
+                        # 不需要处理 holders 或 investments
+                        pass
+        
+                self.wait_crawl_q.task_done()
+
+                single_time_crawled += 1
 
             except queue.Empty:
-                logger1.info('+++++{}: No data in wait_crawl_q'.format(self.name))
-                logger1.info('+++++{} end+++++'.format(self.name))
+                logger1.info('+++++{}: No data in wait_crawl_q'.format(self.thread_name))
+                logger1.info('+++++{} end+++++'.format(self.thread_name))
 
                 return
 
@@ -236,33 +298,120 @@ class WriteThred(threading.Thread):
         self.db_semaphore = db_semaphore
 
     def run(self):
+        # 每条单独写入 or 批量写入？
+
+        # # 单条写入
+        # while 1:
+        #     try:
+        #         # 若待写队列20s没有数据
+        #         flag, unique, name, level, crawled_date, has_error = self.wait_write_q.get(timeout=20)
+
+        #         # 更新该记录的 crawled_date, has_error
+        #         if flag == 0:
+        #             sql = """UPDATE crawl 
+        #                 SET `crawled_date` = %s, `has_error` = %s
+        #                 WHERE `unique` = %s"""
+        #             self.db_semaphore.acquire()
+        #             try:
+        #                 self.cursor.execute(sql, (crawled_date, has_error, unique))
+        #                 self.conn.commit()
+        #             except pymysql.DatabaseError:
+        #                 self.conn.rollback()
+        #                 logger1.error('*****WriteThread: update ({}, {}, {}, {}) error'.format(unique, name, crawled_date, has_error))
+        #             self.db_semaphore.release()
+
+        #         # 插入该记录的 unique, name, level
+        #         elif flag == 1:
+        #             sql = """INSERT IGNORE crawl (`unique`, `name`, `level`)
+        #                 VALUES (%s, %s, %s)"""
+        #             self.db_semaphore.acquire()
+        #             try:
+        #                 self.cursor.execute(sql, (unique, name, level))
+        #                 self.conn.commit()
+        #             except pymysql.DatabaseError:
+        #                 self.conn.rollback()
+        #                 logger1.error('*****WriteThread: insert ({}, {}, {}) error'.format(unique, name, level))
+        #             self.db_semaphore.release()
+                
+        #     except queue.Empty:
+        #         logger1.info('*****WriteThread: No data in wait_write_q')
+        #         logger1.info('*****WriteThread end*****')
+        #         return
+
+        # 批量写入
+        update_list = []
+        insert_list = []
         while 1:
             try:
-                # 等待20秒
                 # 若待写队列20s没有数据
-                name, unique, need_crawl, has_error = self.wait_write_q.get(timeout=20)
-                sql = ''
-                try:
-                    self.db_semaphore.acquire()
-                    sql = "insert into firm_unique values ('{}', '{}', {}, {})".format(name, unique, need_crawl, has_error)
-                    self.cursor.execute(sql)
-                    self.conn.commit()
-                except sqlite3.Error:
-                    self.conn.rollback()
-                    if not need_crawl:
-                        sql = "update firm_unique set need_crawl=0, has_error={} where firm_unique='{}' and need_crawl=1".format(has_error, unique)
-                        self.cursor.execute(sql)
-                        self.conn.commit()
-                finally:
-                    self.db_semaphore.release()
+                flag, unique, name, level, crawled_date, has_error = self.wait_write_q.get(timeout=20)
+
+                if flag == 0:
+                    update_list.append((crawled_date, has_error, unique))
+
+                    # 若更新列表长度为500，一次性写入数据库
+                    if (len(update_list) == 500):
+                        sql = """UPDATE crawl 
+                            SET `crawled_date` = %s, `has_error` = %s
+                            WHERE `unique` = %s"""
+                        self.db_semaphore.acquire()
+                        try:
+                            self.cursor.executemany(sql, update_list)
+                            self.conn.commit()
+                        except pymysql.DatabaseError:
+                            self.conn.rollback()
+                            logger1.error('*****WriteThread: update error')
+                        self.db_semaphore.release()
+
+                        update_list.clear()
+
+                elif flag == 1:
+                    insert_list.append((unique, name, level))
+
+                    # 若更新列表长度为500，一次性写入数据库
+                    if (len(insert_list) == 500):
+                        sql = """INSERT IGNORE crawl (`unique`, `name`, `level`)
+                        VALUES (%s, %s, %s)"""
+                        self.db_semaphore.acquire()
+                        try:
+                            self.cursor.executemany(sql, insert_list)
+                            self.conn.commit()
+                        except pymysql.DatabaseError:
+                            self.conn.rollback()
+                            logger1.error('*****WriteThread: insert error')
+                        self.db_semaphore.release()
+
+                        insert_list.clear()
 
             except queue.Empty:
+                # 将列表内的数据写入数据库
+                sql = """UPDATE crawl 
+                    SET `crawled_date` = %s, `has_error` = %s
+                    WHERE `unique` = %s"""
+                self.db_semaphore.acquire()
+                try:
+                    self.cursor.executemany(sql, update_list)
+                    self.conn.commit()
+                except pymysql.DatabaseError:
+                    self.conn.rollback()
+                    logger1.error('*****WriteThread: update error')
+
+                sql = """INSERT IGNORE crawl (`unique`, `name`, `level`)
+                        VALUES (%s, %s, %s)"""
+                try:
+                    self.cursor.executemany(sql, insert_list)
+                    self.conn.commit()
+                except pymysql.DatabaseError:
+                    self.conn.rollback()
+                    logger1.error('*****WriteThread: insert error')
+                self.db_semaphore.release()
+
                 logger1.info('*****WriteThread: No data in wait_write_q')
                 logger1.info('*****WriteThread end*****')
                 return
 
 
-readThread = ReadThread(cursor, company_list, wait_crawl_q, db_semaphore)
+readThread = ReadThread(cursor, wait_crawl_q, db_semaphore)
 crawlThreaad1 = CrawlThread('CrawlThread-1', wait_crawl_q, wait_write_q)
 crawlThreaad2 = CrawlThread('CrawlThread-2', wait_crawl_q, wait_write_q)
 writeThred = WriteThred(conn, cursor, wait_write_q, db_semaphore)

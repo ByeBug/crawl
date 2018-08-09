@@ -7,7 +7,7 @@ Created on Sun May 20 00:44:50 2018
 从东方财富爬取债券详细信息
 """
 
-import requests
+import requests, os, json
 
 
 def crawl_bond_detail_eastmoney(bond_code, market):
@@ -68,10 +68,18 @@ def crawl_bond_detail_eastmoney(bond_code, market):
     bond_detail['expire_trigger_price'] = l[6]
     bond_detail['pure_bond_value'] = l[7]
 
+    path = 'g:/crawl/'
+    json_path = path + 'json/bond_eastmoney/'
+
+    if not os.path.isdir(json_path):
+        os.makedirs(json_path)
+    with open(json_path + bond_detail['BONDCODE'] + '.json', 'w', encoding='utf-8') as f:
+        json.dump(bond_detail, f, ensure_ascii=False)
+
     return bond_detail
 
 
 if __name__ == '__main__':
-    code = '113507'
+    code = '118646'
     market = 'SH'
     bond_detail = crawl_bond_detail_eastmoney(code, market)

@@ -13,6 +13,8 @@ A股为主体 B股为附属
 import re
 import os
 import json
+import configparser
+
 import requests
 
 
@@ -139,11 +141,13 @@ def crawl_from_eastmoney(code):
 
     eastmoney['managers'] = managers
 
+    # 按报告期，reportDateType = 0
     payload = {
         'code': eastmoney_code,
         'companyType': 4,
         'reportDateType': 0,
-        'reportType': 1
+        'reportType': 1,
+        'endDate': ''
     }
 
     # 资产负债表
@@ -152,6 +156,8 @@ def crawl_from_eastmoney(code):
     r.raise_for_status()
 
     data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 0
 
     eastmoney['balance_sheet'] = data
 
@@ -161,6 +167,8 @@ def crawl_from_eastmoney(code):
     r.raise_for_status()
 
     data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 0
 
     eastmoney['income_statement'] = data
 
@@ -170,11 +178,90 @@ def crawl_from_eastmoney(code):
     r.raise_for_status()
 
     data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 0
 
     eastmoney['cash_flow_statement'] = data
 
+    # 按年度
+    payload['reportDateType'] = 1
+
+    # 资产负债表
+    r = requests.get(url_balance, timeout=4, headers=headers, params=payload)
+    r.raise_for_status()
+
+    data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 1
+
+    eastmoney['balance_sheet'].extend(data)
+
+    # 利润表
+    r = requests.get(url_income, timeout=4, headers=headers, params=payload)
+    r.raise_for_status()
+
+    data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 1
+
+    eastmoney['income_statement'].extend(data)
+
+    # 现金流量表
+    r = requests.get(url_cash_flow, timeout=4, headers=headers, params=payload)
+    r.raise_for_status()
+
+    data = json.loads(r.json())
+    for d in data:
+        d['REPORTTYPE'] = 1
+
+    eastmoney['cash_flow_statement'].extend(data)
+
+    # 增发配股
+    url_financing = 'http://emweb.securities.eastmoney.com/PC_HSF10/BonusFinancing/BonusFinancingAjax'
+    payload = {'code': eastmoney_code}
+    
+    r = requests.get(url_financing, timeout=4, headers=headers, params=payload)
+    r.raise_for_status()
+    
+    data = r.json()['Result']
+    # 增发明细
+    add_details = []
+    for d in data['zfmx']:
+        item = {}
+        item['add_date'] = d['zfsj']
+        item['act_num_of_add'] = d['sjzfsl']
+        item['act_add_net_raise'] = d['sjmjje']
+        item['add_price'] = d['zfjg']
+        item['issue_means'] = d['fxfs']
+        item['record_date'] = d['gqdjr']
+        item['sec_offer_date'] = d['zfssr']
+        item['fund_trans_date'] = d['zjdzr']
+        
+        add_details.append(item)
+
+    eastmoney['add_details'] = add_details
+    # 配股明细
+    allot_details = []
+    for d in data['pgmx']:
+        item2 = {}
+        item2['allot_date'] = d['pgggr']
+        item2['allot_price'] = d['pgjg']
+        item2['act_num_of_allot'] = d['sjpgsl']
+        item2['act_allot_net_raise'] = d['sjmjze']
+        item2['record_date'] = d['gqdjr']
+        item2['reference_date'] = d['cqjzr']
+        item2['allot_plan'] = d['pgfa']
+        
+        allot_details.append(item2)
+    
+    eastmoney['allot_details'] = allot_details
+
     # 储存为文件
-    json_path = 'json/eastmoney'
+    config = configparser.RawConfigParser()
+    config.read('config.cfg', encoding='utf-8')
+    path = config['crawl']['save_path']
+    
+    json_path = os.path.join(path, 'json/eastmoney')
     if not os.path.isdir(json_path):
         os.makedirs(json_path)
     with open(os.path.join(json_path, code + '.json'), 'w', encoding='utf-8') as f:
