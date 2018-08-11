@@ -16,18 +16,21 @@ import os
 import re
 
 import pymysql
+import pymongo
+
+from tool.convert_to_number import convert_to_number
+from tool.convert_to_date import convert_to_date
+from tool.changeinfo import change_changeinfo
 
 
-def store_listed_company(data, cursor, conn):
-    eastmoney_file = 'json/eastmoney/' + data['overview']['stock_code'] + '.json'
-    with open(eastmoney_file, 'r', encoding='utf-8') as f:
-        eastmoney_data = json.load(f)
+def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
+    data = qichacha
+    eastmoney_data = eastmoney
 
     print('storing', data['companyName'])
 
     # 客户表 c_client
-    pure_name = re.sub(r'\W', '', data['companyName'])  # 去除括号、空格、连字符等非数字字母下划线字符
-    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+    c_id = re.search(r'firm_(\w+).html', qichacha['url']).group(1)
     name = data['companyName'].replace('（', '(').replace('）', ')')  # 公司名称以企查查为准 替换为英文括号
     state = data['baseInfo']['company_status']
     uscc = data['baseInfo']['credit_code']
@@ -82,8 +85,7 @@ def store_listed_company(data, cursor, conn):
         id_holder = 0
         for holder in holders['sdgd']:
             id_holder += 1
-            pure_name = re.sub(r'\W', '', holder['gdmc']) 
-            shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+            shaholder_id = ''
             shaholder_name = holder['gdmc']
             number = holder['cgs']
             rate = holder['zltgbcgbl']
@@ -103,8 +105,7 @@ def store_listed_company(data, cursor, conn):
         id_holder = 0
         for holder in holders['sdltgd']:
             id_holder += 1
-            pure_name = re.sub(r'\W', '', holder['gdmc']) 
-            shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+            shaholder_id = ''
             shaholder_name = holder['gdmc']
             number = holder['cgs']
             rate = holder['zltgbcgbl']
@@ -176,8 +177,7 @@ def store_listed_company(data, cursor, conn):
     # 对外投资表 c_investment
     investments = []
     for investment in data['investments']:
-        pure_name = re.sub(r'\W', '', investment['name'])
-        i_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+        i_id = re.search(r'firm_(\w+).html', investment['url']).group(1)
         name = investment['name']
         capital = investment['registered_capital']
         count = ''
@@ -222,10 +222,23 @@ def store_listed_company(data, cursor, conn):
 
     cursor.executemany(sql, client_managers)
 
+    # 变更信息表 c_changeinfo
+    changeinfos = []
+    for changeinfo in data['changeInfos']:
+        time = changeinfo['time']
+        item = changeinfo['item']
+        before = change_changeinfo(changeinfo['before'])
+        after = change_changeinfo(changeinfo['after'])
+
+        changeinfos.append(c_id, time, item, before, after)
+
+    sql = """insert into c_changeinfo (c_id, time, item, before, after)
+    values (%s, %s, %s, %s, %s)"""
+
+    cursor.executemany(sql, changeinfos)
+
     # 股票信息表 shares
-    cninfo_file = 'json/cninfo/' + data['overview']['stock_code'] + '.json'
-    with open(cninfo_file, 'r', encoding='utf-8') as f:
-        cninfo_data = json.load(f)
+    cninfo_data = cninfo
 
     s_id = eastmoney_data['code']
     s_name = eastmoney_data['name']
@@ -262,33 +275,84 @@ def store_listed_company(data, cursor, conn):
                          turnover_rate, max_price, under_rate, price_rate, lead_underwriter, recommender, institution))
 
     # 股票融资表 shares_financing
+    shares_financing = []
     s_id = eastmoney_data['code']
     s_name = eastmoney_data['name']
-    issue_type = cninfo_data['issue_type']
-    issue_begin = cninfo_data['issue_begin']
-    issue_nature = cninfo_data['issue_nature']
-    issue_shares_type = cninfo_data['issue_shares_type']
-    issue_way = cninfo_data['issue_way']
-    issue_count = cninfo_data['issue_count']
-    issue_rmb_price = cninfo_data['issue_rmb_price']
-    issue_fore_price = cninfo_data['issue_fore_price']
-    fact_raise_funds = cninfo_data['fact_raise_funds']
-    fact_issue_cost = cninfo_data['fact_issue_cost']
-    issue_rate = cninfo_data['issue_rate']
-    online_rate = cninfo_data['online_rate']
-    two_grade_rate = cninfo_data['two_grade_rate']
+
+    # 新发    
+    issue_type = '新发'
+    issue_date = eastmoney_data['survey']['about_issue']['wsfxrq']
+    issue_price = eastmoney_data['survey']['about_issue']['mgfxj']
+    issue_count = convert_to_number(eastmoney_data['survey']['about_issue']['fxl']) / 10000
+    raise_funds = convert_to_number(eastmoney_data['survey']['about_issue']['mjzjje']) / 10000
+    issue_way = eastmoney_data['survey']['about_issue']['fxfs']
+    equity_registration_date = ''
+    additional_listing_date = ''
+    fund_arrival_date = ''
+    dividend_date = ''
+    allotment_plan = ''
+
+    shares_financing.append((s_id, s_name, issue_type, issue_date, issue_price, issue_count, raise_funds, issue_way, 
+            equity_registration_date, additional_listing_date, fund_arrival_date, dividend_date, allotment_plan))
+
+    # 增发
+    for add_detail in eastmoney_data['add_details']:
+        issue_type = '增发'
+        issue_date = convert_to_date(add_detail['add_date'])
+        issue_price = add_detail['add_price']
+        issue_count = add_detail['act_num_of_add']
+        raise_funds = add_detail['act_add_net_raise']
+        issue_way = add_detail['issue_means']
+        equity_registration_date = convert_to_date(add_detail['record_date'])
+        additional_listing_date = convert_to_date(add_detail['sec_offer_date'])
+        fund_arrival_date = convert_to_date(add_detail['fund_trans_date'])
+
+        dividend_date = ''
+        allotment_plan = ''
+
+        shares_financing.append((s_id, s_name, issue_type, issue_date, issue_price, issue_count, raise_funds, issue_way, 
+            equity_registration_date, additional_listing_date, fund_arrival_date, dividend_date, allotment_plan))
+    
+    # 配股
+    for allot_detail in eastmoney_data['allot_details']:
+        issue_type = '配股'
+        issue_date = convert_to_date(allot_detail['allot_date'])
+        issue_price = allot_detail['allot_price']
+        issue_count = allot_detail['act_num_of_allot']
+        raise_funds = allot_detail['act_allot_net_raise']
+        issue_way = ''
+        equity_registration_date = convert_to_date(allot_detail['allot_date'])
+        additional_listing_date = ''
+        fund_arrival_date = ''
+        dividend_date = convert_to_date(allot_detail['reference_date'])
+        allotment_plan = allot_detail['allot_plan']
+
+        shares_financing.append((s_id, s_name, issue_type, issue_date, issue_price, issue_count, raise_funds, issue_way, 
+            equity_registration_date, additional_listing_date, fund_arrival_date, dividend_date, allotment_plan))
 
     sql = """insert into shares_financing
-    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
-    cursor.execute(sql, (s_id, s_name, issue_type, issue_begin, issue_nature, issue_shares_type, issue_way, issue_count,
-                         issue_rmb_price, issue_fore_price, fact_raise_funds, fact_issue_cost, issue_rate, online_rate, two_grade_rate))
+    cursor.executemany(sql, shares_financing)
+
+    # 股票质押公告表
+    pledge_announcements = []
+    for announcement in cninfo_data['pledge_announcement']:
+        a_title = announcement['announcementTitle']
+        a_time = announcement['announcementTime']
+        a_url = announcement['adjunctUrl']
+        a_type = announcement['adjunctType']
+        a_size = announcement['adjunctSize']
+
+        pledge_announcements.append((s_id, s_name, a_title, a_time, a_url, a_type, a_size))
+
+    sql = """insert into shares_pledge
+    values (%s, %s, %s, %s, %s, %s, %s)"""
+
+    cursor.executemany(sql, pledge_announcements)
 
     # B股信息
     if eastmoney_data['b_stock_info']:
-        cninfo_file = 'json/cninfo/' + eastmoney_data['b_stock_info']['code'] + '.json'
-        with open(cninfo_file, 'r', encoding='utf-8') as f:
-            cninfo_data = json.load(f)
 
         # 股票信息表 shares
         s_id = eastmoney_data['b_stock_info']['code']
@@ -324,29 +388,6 @@ def store_listed_company(data, cursor, conn):
         cursor.execute(sql, (s_id, s_name, security_type, list_date, address, pe, issue_time, issue_type,
                              face_value, issue_count, issue_price, issue_cost, issue_tot_market, raise_funds, open_price, end_price,
                              turnover_rate, max_price, under_rate, price_rate, lead_underwriter, recommender, institution))
-
-        # 股票融资表 shares_financing
-        s_id = eastmoney_data['b_stock_info']['code']
-        s_name = eastmoney_data['b_stock_info']['name']
-        issue_type = cninfo_data['issue_type']
-        issue_begin = cninfo_data['issue_begin']
-        issue_nature = cninfo_data['issue_nature']
-        issue_shares_type = cninfo_data['issue_shares_type']
-        issue_way = cninfo_data['issue_way']
-        issue_count = cninfo_data['issue_count']
-        issue_rmb_price = cninfo_data['issue_rmb_price']
-        issue_fore_price = cninfo_data['issue_fore_price']
-        fact_raise_funds = cninfo_data['fact_raise_funds']
-        fact_issue_cost = cninfo_data['fact_issue_cost']
-        issue_rate = cninfo_data['issue_rate']
-        online_rate = cninfo_data['online_rate']
-        two_grade_rate = cninfo_data['two_grade_rate']
-
-        sql = """insert into shares_financing
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-
-        cursor.execute(sql, (s_id, s_name, issue_type, issue_begin, issue_nature, issue_shares_type, issue_way, issue_count,
-                             issue_rmb_price, issue_fore_price, fact_raise_funds, fact_issue_cost, issue_rate, online_rate, two_grade_rate))
 
     short_name = eastmoney_data['name']
     b_id = eastmoney_data['code']
@@ -655,12 +696,13 @@ def store_listed_company(data, cursor, conn):
     print('stored successfully')
 
 
-def store_not_listed_company(data, cursor, conn):
+def store_not_listed_company(qichacha, conn, cursor):
+    data = qichacha
+
     print('storing', data['companyName'])
 
     # 客户表 c_client
-    pure_name = re.sub(r'\W', '', data['companyName'])
-    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+    c_id = re.search(r'firm_(\w+).html', data['url']).group(1)
     name = data['companyName'].replace('（', '(').replace('）', ')')
     engl_name = data['baseInfo']['english_name']
     used_name = data['baseInfo']['used_name']
@@ -697,8 +739,11 @@ def store_not_listed_company(data, cursor, conn):
     holders = []
     for holder in data['holders']:
         time = datetime.date.today().isoformat()
-        pure_name = re.sub(r'\W', '', holder['name']) 
-        shaholder_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+        m = re.search(r'firm_(\w+).html', holder['url'])
+        if m:
+            shaholder_id = m.group(1)
+        else:
+            shaholder_id = ''
         shaholder_name = holder['name']
         invest_rate = holder['proportion']
         sub_funding = holder['amount']
@@ -716,8 +761,7 @@ def store_not_listed_company(data, cursor, conn):
     # 对外投资表 c_investment
     investments = []
     for investment in data['investments']:
-        pure_name = re.sub(r'\W', '', investment['name'])
-        i_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+        i_id = re.search(r'firm_(\w+).html', investment['url']).group(1)
         name = investment['name']
         capital = investment['registered_capital']
         count = ''
@@ -757,29 +801,40 @@ def store_not_listed_company(data, cursor, conn):
 
     cursor.executemany(sql, client_managers)
 
+    # 变更信息表 c_changeinfo
+    changeinfos = []
+    for changeinfo in data['changeInfos']:
+        time = changeinfo['time']
+        item = changeinfo['item']
+        before = change_changeinfo(changeinfo['before'])
+        after = change_changeinfo(changeinfo['after'])
+
+        changeinfos.append(c_id, time, item, before, after)
+
+    sql = """insert into c_changeinfo (c_id, time, item, before, after)
+    values (%s, %s, %s, %s, %s)"""
+
+    cursor.executemany(sql, changeinfos)
+
     conn.commit()
 
     print('stored successfully')
 
 
-def store(qichacha_file, conn, cursor):
-    with open(qichacha_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    pure_name = re.sub(r'\W', '', data['companyName'])
-    c_id = hashlib.md5(pure_name.encode('utf-8')).hexdigest()
+def store(qichacha, eastmoney, cninfo, conn, cursor):
+    c_id = re.search(r'firm_(\w+).html', qichacha['url']).group(1)
 
     sql = """select c_id from c_client where c_id='{}'""".format(c_id)
     cursor.execute(sql)
 
     if cursor.fetchone():
-        print(data['companyName'], 'already in database')
+        print(qichacha['companyName'], 'already in database')
     else:
         try:
-            if data['overview']['stock_code']:
-                store_listed_company(data, cursor, conn)
+            if eastmoney:
+                store_listed_company(qichacha, eastmoney, cninfo, conn, cursor)
             else:
-                store_not_listed_company(data, cursor, conn)
+                store_not_listed_company(qichacha, conn, cursor)
         except pymysql.DatabaseError as e:
             conn.rollback()
             raise e
@@ -794,15 +849,21 @@ if __name__ == '__main__':
     store_db_user = config['store_db']['user']
     store_db_passwd = config['store_db']['passwd']
     store_db_db = config['store_db']['db']
-    conn = pymysql.connect(host=store_db_host, port=store_db_port, 
+    conn = pymysql.connect(host=store_db_host, port=int(store_db_port), 
                             user=store_db_user, passwd=store_db_passwd, 
                             db=store_db_db, charset='utf8')
     cursor = conn.cursor()
 
-    path = config['crawl']['save_path']
-    path = os.path.join(path, 'json/qichacha')
+    crawl_mongodb_host = config['crawl_mongodb']['host']
+    crawl_mongodb_port = config['crawl_mongodb']['port']
+    crawl_mongodb_db = config['crawl_mongodb']['db']
+    crawl_mongodb_col = config['crawl_mongodb']['collection']
+    mongo_client = pymongo.MongoClient(host=crawl_mongodb_host, port=int(crawl_mongodb_port))
+    mongo_collection = mongo_client[crawl_mongodb_db][crawl_mongodb_col]
 
-    store(os.path.join(path, '渤海金控投资股份有限公司.json'), conn, cursor)
+    item = mongo_collection.find_one({'store_time': '', 'eastmoney': ''}, {'qichacha': 1, 'eastmoney': 1, 'cninfo': 1})
+
+    store(item['qichacha'], item['eastmoney'], item['cninfo'], conn, cursor)
 
     cursor.close()
     conn.close()

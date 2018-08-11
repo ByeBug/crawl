@@ -183,16 +183,16 @@ def crawl_from_cninfo(code):
 
         payload['pageNum'] += 1
 
-    # 保存为JSON
-    config = configparser.RawConfigParser()
-    config.read('config.cfg', encoding='utf-8')
-    path = config['crawl']['save_path']
+    # # 保存为JSON
+    # config = configparser.RawConfigParser()
+    # config.read('config.cfg', encoding='utf-8')
+    # path = config['crawl']['save_path']
 
-    json_path = os.path.join(path, 'json/cninfo')
-    if not os.path.isdir(json_path):
-        os.makedirs(json_path)
-    with open(os.path.join(json_path, code + '.json'), 'w', encoding='utf-8') as f:
-        json.dump(cninfo, f, ensure_ascii=False)
+    # json_path = os.path.join(path, 'json/cninfo')
+    # if not os.path.isdir(json_path):
+    #     os.makedirs(json_path)
+    # with open(os.path.join(json_path, code + '.json'), 'w', encoding='utf-8') as f:
+    #     json.dump(cninfo, f, ensure_ascii=False)
 
     return cninfo
 

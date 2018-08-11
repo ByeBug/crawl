@@ -5,7 +5,8 @@ Created on Mon May  7 21:56:58 2018
 
 @author: zhao
 
-从企查查爬取指定公司的信息，保存为JSON文件
+从企查查爬取指定公司的信息
+返回解析的对象和原始网页
 """
 
 import re
@@ -100,7 +101,6 @@ def get_config():
     config = configparser.RawConfigParser()
     config.read('config.cfg', encoding='utf-8')
 
-    path = config['crawl']['save_path']
     user_agent = config['crawl']['user_agent']
     cookie_str = config['qichacha']['cookie_str']
 
@@ -118,7 +118,7 @@ def get_config():
         k, v = cookie.strip().split('=')
         cookies[k] = v
 
-    return headers, cookies, path
+    return headers, cookies
 
 
 def search_company(name, cookies, headers, proxy_dict = {}):
@@ -356,7 +356,7 @@ def get_detail(url, r, s, cookies, headers, proxy_dict = {}):
 
 
 def crawl_from_qichacha(name, url, proxy_dict={}):
-    headers, cookies, path = get_config()
+    headers, cookies = get_config()
 
     # 若未提供url 则搜索
     if not url:
@@ -399,23 +399,23 @@ def crawl_from_qichacha(name, url, proxy_dict={}):
 
         raise UrlError((name, r.url))
 
-    # 储存为JSON文件
-    json_path = os.path.join(path, 'json/qichacha')
-    if not os.path.isdir(json_path):
-        os.makedirs(json_path)
-    # 使用 unique 作为文件名
-    unique = re.search(r'_(\w+).html', qichacha['url']).group(1)
-    with open(os.path.join(json_path, unique + '.json'), 'w', encoding='utf-8') as f:
-        json.dump(qichacha, f, ensure_ascii=False)
+    # # 储存为JSON文件
+    # json_path = os.path.join(path, 'json/qichacha')
+    # if not os.path.isdir(json_path):
+    #     os.makedirs(json_path)
+    # # 使用 unique 作为文件名
+    # unique = re.search(r'_(\w+).html', qichacha['url']).group(1)
+    # with open(os.path.join(json_path, unique + '.json'), 'w', encoding='utf-8') as f:
+    #     json.dump(qichacha, f, ensure_ascii=False)
 
-    # 储存HTML文件
-    html_path = os.path.join(path, 'html', time.strftime('%Y-%m-%d', time.localtime()))
-    if not os.path.isdir(html_path):
-        os.makedirs(html_path)
-    with open(os.path.join(html_path, unique + '.html'), 'w', encoding='utf-8') as f:
-        f.write(r.text)
+    # # 储存HTML文件
+    # html_path = os.path.join(path, 'html', time.strftime('%Y-%m-%d', time.localtime()))
+    # if not os.path.isdir(html_path):
+    #     os.makedirs(html_path)
+    # with open(os.path.join(html_path, unique + '.html'), 'w', encoding='utf-8') as f:
+    #     f.write(r.text)
 
-    return qichacha
+    return qichacha, r.text
 
 
 if __name__ == '__main__':
@@ -423,4 +423,4 @@ if __name__ == '__main__':
     url = 'https://www.qichacha.com/firm_c70a55cb048c8e4db7bca357a2c113e0.html'
     proxy_dict = {'http': '', 'https': ''}
 
-    qichacha = crawl_from_qichacha(name, url, proxy_dict)
+    qichacha, html = crawl_from_qichacha(name, url, proxy_dict)

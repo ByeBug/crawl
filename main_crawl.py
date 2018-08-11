@@ -4,9 +4,10 @@ Created on Tue May 22 17:56:34 2018
 
 @author: zhao
 
-多线程爬取主程序 v2.0
+多线程爬取主程序 v3.0
 数据库中保存层级
 股东爬两层，投资爬六层
+将爬取的对象存入MongoDB
 """
 
 
@@ -21,6 +22,7 @@ import datetime
 import configparser
 
 import pymysql
+import pymongo
 
 from spiders.crawl_qichacha import NeedValidationError, crawl_from_qichacha
 from spiders.crawl_stock import crawl_stock
@@ -55,6 +57,13 @@ conn = pymysql.connect(host='localhost', port=3306,
                        db=crawl_db_db, charset='utf8')
 cursor = conn.cursor()
 
+crawl_mongodb_host = config['crawl_mongodb']['host']
+crawl_mongodb_port = config['crawl_mongodb']['port']
+crawl_mongodb_db = config['crawl_mongodb']['db']
+crawl_mongodb_col = config['crawl_mongodb']['collection']
+mongo_client = pymongo.MongoClient(host=crawl_mongodb_host, port=int(crawl_mongodb_port))
+mongo_collection = mongo_client[crawl_mongodb_db][crawl_mongodb_col]
+
 wait_crawl_q = queue.Queue()
 wait_write_q = queue.Queue()
 
@@ -62,14 +71,6 @@ db_semaphore = threading.Semaphore(1)
 
 need_validate = False
 single_time_crawled = 0
-
-
-def crawl_stock_wrapper(code):
-    try:
-        crawl_stock(code)
-    except Exception as e:
-        logger1.exception(e)
-        logger1.error('crawl stock {} error'.format(code))
 
 
 class ReadThread(threading.Thread):
@@ -101,10 +102,10 @@ class ReadThread(threading.Thread):
 
                     self.wait_crawl_q.put((unique, name, level))
 
-                logger1.info('----- ReadThread blocking')
+                logger1.info('-----ReadThread blocking')
                 self.wait_crawl_q.join()
 
-                logger1.info('----- ReadThread Wake up')
+                logger1.info('-----ReadThread Wake up')
                 if need_validate:
                     logger1.info('-----ReadThread: Need validate')
                     logger1.info('-----ReadThread end-----')
@@ -116,9 +117,10 @@ class ReadThread(threading.Thread):
 
 
 class CrawlThread(threading.Thread):
-    def __init__(self, thread_name, wait_crawl_q, wait_write_q):
+    def __init__(self, thread_name, mongo_collection, wait_crawl_q, wait_write_q):
         super().__init__()
         self.thread_name = thread_name
+        self.mongo_collection = mongo_collection
         self.wait_crawl_q = wait_crawl_q
         self.wait_write_q = wait_write_q
 
@@ -139,7 +141,7 @@ class CrawlThread(threading.Thread):
                 time.sleep(random.uniform(1, 2))
 
                 try:
-                    qichacha = crawl_from_qichacha(name, url, proxy)
+                    qichacha, html = crawl_from_qichacha(name, url, proxy)
 
                 # 出现验证错误
                 except NeedValidationError as e:
@@ -200,10 +202,27 @@ class CrawlThread(threading.Thread):
                     wait_write_q_item = (flag, unique, name, level, crawled_date, has_error)
                     self.wait_write_q.put(wait_write_q_item)
 
+                    eastmoney, cninfo = '', ''
                     # 若有股票代码则爬取股票信息
                     if qichacha['overview']['stock_code']:
-                        crawl_stock_thread = threading.Thread(target=crawl_stock_wrapper, args=(qichacha['overview']['stock_code'], ), name='crawl-stock-thread')
-                        crawl_stock_thread.start()
+                        try:
+                            eastmoney, cninfo = crawl_stock(qichacha['overview']['stock_code'])
+                        except Exception as e:
+                            logger1.exception(e)
+                            logger1.error('crawl stock {} error'.format(qichacha['overview']['stock_code']))
+
+                    # 将爬取结果入库
+                    document = {
+                        'unique': unique,
+                        'company': qichacha['companyName'],
+                        'html': html,
+                        'qichacha': qichacha,
+                        'eastmoney': eastmoney,
+                        'cninfo': cninfo,
+                        'crawl_time': str(datetime.date.today()),
+                        'store_time': ''
+                    }
+                    self.mongo_collection.insert_one(document)
 
                     # 根据该公司 level 将 holders 或 investments 加入待写队列
 
@@ -343,8 +362,8 @@ class WriteThred(threading.Thread):
         insert_list = []
         while 1:
             try:
-                # 若待写队列20s没有数据
-                flag, unique, name, level, crawled_date, has_error = self.wait_write_q.get(timeout=20)
+                # 若待写队列30s没有数据
+                flag, unique, name, level, crawled_date, has_error = self.wait_write_q.get(timeout=30)
 
                 if flag == 0:
                     update_list.append((crawled_date, has_error, unique))
@@ -412,18 +431,15 @@ class WriteThred(threading.Thread):
 
 
 readThread = ReadThread(cursor, wait_crawl_q, db_semaphore)
-crawlThreaad1 = CrawlThread('CrawlThread-1', wait_crawl_q, wait_write_q)
-crawlThreaad2 = CrawlThread('CrawlThread-2', wait_crawl_q, wait_write_q)
+crawlThreaad = CrawlThread('CrawlThread', mongo_collection, wait_crawl_q, wait_write_q)
 writeThred = WriteThred(conn, cursor, wait_write_q, db_semaphore)
 
 readThread.start()
-crawlThreaad1.start()
-crawlThreaad2.start()
+crawlThreaad.start()
 writeThred.start()
 
 readThread.join()
-crawlThreaad1.join()
-crawlThreaad2.join()
+crawlThreaad.join()
 writeThred.join()
 
 cursor.close()

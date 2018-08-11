@@ -4,18 +4,23 @@
 
 import pymysql
 
-import datetime
 
-conn = pymysql.connect(host='localhost', port=3306, user='root', passwd='root', db='mysqltest', charset='utf8')
+conn = pymysql.connect(host='localhost', port=3306, 
+                       user='root', passwd='root', 
+                       db='mysqltest', charset='utf8')
 cursor = conn.cursor()
 
 try:
-    sql = 'select * from test where c_date < %s'
-    d = datetime.date.today()
+    sql = """select * from test where d_varchar in %s"""
+    item = ('你好', 'aaa')
     
-    cursor.execute(sql, (d,))
+    cursor.execute(sql, (item,))
+    conn.commit()
+    
     q = cursor.fetchall()
 except pymysql.DatabaseError as e:
+    conn.rollback()
+    
     cursor.close()
     conn.close()
 
