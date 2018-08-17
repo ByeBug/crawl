@@ -87,7 +87,7 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
             id_holder += 1
             shaholder_id = ''
             shaholder_name = holder['gdmc']
-            number = holder['cgs']
+            number = convert_to_number(holder['cgs'])
             rate = holder['zltgbcgbl']
             shares_type = holder['gflx']
 
@@ -107,7 +107,7 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
             id_holder += 1
             shaholder_id = ''
             shaholder_name = holder['gdmc']
-            number = holder['cgs']
+            number = convert_to_number(holder['cgs'])
             rate = holder['zltgbcgbl']
             shares_type = holder['gflx']
             shaholder_type = holder['gdxz']
@@ -128,11 +128,11 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
             id_mb += 1
             classify = '行业'
             type_mb = mb['zygc']
-            income = mb['zysr']
+            income = convert_to_number(mb['zysr'])
             inc_rate = mb['srbl']
-            cost = mb['zycb']
+            cost = convert_to_number(mb['zycb'])
             cost_rate = mb['cbbl']
-            profit = mb['zylr']
+            profit = convert_to_number(mb['zylr'])
             pro_rate = mb['lrbl']
             mon_rate = mb['mll']
 
@@ -143,9 +143,9 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
             id_mb += 1
             classify = '地区'
             type_mb = mb['zygc']
-            income = mb['zysr']
+            income = convert_to_number(mb['zysr'])
             inc_rate = mb['srbl']
-            cost = mb['zycb']
+            cost = convert_to_number(mb['zycb'])
             cost_rate = mb['cbbl']
             profit = mb['zylr']
             pro_rate = mb['lrbl']
@@ -158,11 +158,11 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
             id_mb += 1
             classify = '产品'
             type_mb = mb['zygc']
-            income = mb['zysr']
+            income = convert_to_number(mb['zysr'])
             inc_rate = mb['srbl']
-            cost = mb['zycb']
+            cost = convert_to_number(mb['zycb'])
             cost_rate = mb['cbbl']
-            profit = mb['zylr']
+            profit = convert_to_number(mb['zylr'])
             pro_rate = mb['lrbl']
             mon_rate = mb['mll']
 
@@ -249,11 +249,11 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     issue_time = eastmoney_data['survey']['about_issue']['wsfxrq']
     issue_type = eastmoney_data['survey']['about_issue']['fxfs']
     face_value = eastmoney_data['survey']['about_issue']['mgmz']
-    issue_count = eastmoney_data['survey']['about_issue']['fxl']
+    issue_count = convert_to_number(eastmoney_data['survey']['about_issue']['fxl']) / 10000
     issue_price = eastmoney_data['survey']['about_issue']['mgfxj']
-    issue_cost = eastmoney_data['survey']['about_issue']['fxfy']
-    issue_tot_market = eastmoney_data['survey']['about_issue']['fxzsz']
-    raise_funds = eastmoney_data['survey']['about_issue']['mjzjje']
+    issue_cost = convert_to_number(eastmoney_data['survey']['about_issue']['fxfy']) / 10000
+    issue_tot_market = convert_to_number(eastmoney_data['survey']['about_issue']['fxzsz']) / 10000
+    raise_funds = convert_to_number(eastmoney_data['survey']['about_issue']['mjzjje']) / 10000
     open_price = eastmoney_data['survey']['about_issue']['srkpj']
     end_price = eastmoney_data['survey']['about_issue']['srspj']
     turnover_rate = eastmoney_data['survey']['about_issue']['srhsl']
@@ -364,11 +364,11 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
         issue_time = eastmoney_data['b_stock_info']['issue_date']
         issue_type = eastmoney_data['b_stock_info']['issue_type']
         face_value = eastmoney_data['b_stock_info']['face_value']
-        issue_count = eastmoney_data['b_stock_info']['issue_count']
+        issue_count = convert_to_number(eastmoney_data['b_stock_info']['issue_count'])
         issue_price = eastmoney_data['b_stock_info']['issue_price']
-        issue_cost = eastmoney_data['b_stock_info']['issue_cost']
-        issue_tot_market = eastmoney_data['b_stock_info']['issue_tot_market']
-        raise_funds = eastmoney_data['b_stock_info']['raise_funds']
+        issue_cost = convert_to_number(eastmoney_data['b_stock_info']['issue_cost'])
+        issue_tot_market = convert_to_number(eastmoney_data['b_stock_info']['issue_tot_market'])
+        raise_funds = convert_to_number(eastmoney_data['b_stock_info']['raise_funds'])
         open_price = eastmoney_data['b_stock_info']['open_price']
         end_price = eastmoney_data['b_stock_info']['end_price']
         turnover_rate = eastmoney_data['b_stock_info']['turnover_rate']

@@ -102,6 +102,7 @@ def get_config():
     config.read('config.cfg', encoding='utf-8')
 
     user_agent = config['crawl']['user_agent']
+    user = config['qichacha']['user']
     cookie_str = config['qichacha']['cookie_str']
 
     headers = {
@@ -118,10 +119,10 @@ def get_config():
         k, v = cookie.strip().split('=')
         cookies[k] = v
 
-    return headers, cookies
+    return headers, user, cookies
 
 
-def search_company(name, cookies, headers, proxy_dict = {}):
+def search_company(name, user, cookies, headers, proxy_dict = {}):
     payload = {'key': name}
     url = 'https://www.qichacha.com/search'
 
@@ -137,7 +138,7 @@ def search_company(name, cookies, headers, proxy_dict = {}):
         if s.script.string.find('var arg1=') != -1:
             raise NeedValidationError('Need Browser Open url: ' + r.url)
 
-    if str(s.select('header ul > li')[7]).find('zhaosy') == -1:
+    if str(s.select('header ul > li')[7]).find(user) == -1:
         raise NotLoginError()
 
     searchlist = s.find('section', id='searchlist')
@@ -155,7 +156,7 @@ def search_company(name, cookies, headers, proxy_dict = {}):
     return new_name, url
 
 
-def get_detail(url, r, s, cookies, headers, proxy_dict = {}):
+def get_detail(url, r, s, user, cookies, headers, proxy_dict = {}):
     if url:
         r = requests.get(url, cookies=cookies, headers=headers, timeout=5, proxies=proxy_dict)
         r.raise_for_status()
@@ -169,7 +170,7 @@ def get_detail(url, r, s, cookies, headers, proxy_dict = {}):
             if s.script.string.find('var arg1=') != -1:
                 raise NeedValidationError('Need Browser Open url: ' + r.url)
 
-        if str(s.select('header ul > li')[7]).find('zhaosy') == -1:
+        if str(s.select('header ul > li')[7]).find(user) == -1:
             raise NotLoginError()
 
     qichacha = init_qichacha()
@@ -356,11 +357,11 @@ def get_detail(url, r, s, cookies, headers, proxy_dict = {}):
 
 
 def crawl_from_qichacha(name, url, proxy_dict={}):
-    headers, cookies = get_config()
+    headers, user, cookies = get_config()
 
     # 若未提供url 则搜索
     if not url:
-        url = search_company(name, cookies, headers, proxy_dict)[1]
+        url = search_company(name, user, cookies, headers, proxy_dict)[1]
 
     r = requests.get(url, cookies=cookies, headers=headers, timeout=5, proxies=proxy_dict)
     r.raise_for_status()
@@ -375,7 +376,7 @@ def crawl_from_qichacha(name, url, proxy_dict={}):
         if s.script.string.find('var arg1=') != -1:
             raise NeedValidationError('Need Browser Open url: ' + r.url)
 
-    if str(s.select('header ul > li')[7]).find('zhaosy') == -1:
+    if str(s.select('header ul > li')[7]).find(user) == -1:
         raise NotLoginError()
 
     companyName = s.find('div', id='company-top').find('div', class_='content').find('h1').string
@@ -383,16 +384,16 @@ def crawl_from_qichacha(name, url, proxy_dict={}):
         companyName = companyName.strip()
 
     if companyName:
-        qichacha, r = get_detail('', r, s, cookies, headers, proxy_dict)    # 已经正确，不需要再请求
+        qichacha, r = get_detail('', r, s, user, cookies, headers, proxy_dict)    # 已经正确，不需要再请求
 
     else:
         # 若提供的url打不开网站
         # 如中车集团的天津实业有限公司
         # 则重新搜索
 
-        # url = search_company(name, cookies, headers, proxy_dict)[1]
+        # url = search_company(name, user, cookies, headers, proxy_dict)[1]
         # print('right url:', url)
-        # qichacha = get_detail(url, r, s, cookies, headers, proxy_dict)   # 传入正确的url，重新请求
+        # qichacha = get_detail(url, r, s, user, cookies, headers, proxy_dict)   # 传入正确的url，重新请求
 
         # 取消更正url的功能
         # 若url错误，则抛出异常，由调用者处理
