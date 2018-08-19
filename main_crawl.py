@@ -19,6 +19,7 @@ import time
 import datetime
 import configparser
 import warnings
+import signal
 
 import pymysql
 import pymongo
@@ -85,14 +86,92 @@ except Exception as e:
     conn.close()
     exit()
 
+# 终止标志
+stop = False
+
+# 信号处理函数
+def signal_handler(signum, frame):
+    global stop
+    logger1.info('Get STOP signal')
+    stop = True
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 # 爬取人id
 crawler_id = int(config['qichacha']['crawler_id'])
+
+# 爬取延迟
+crawl_delay = int(config['crawl']['delay'])
+
+# 爬取有效期为 30 天
+limit_date = datetime.date.today() - datetime.timedelta(days=30)
 
 wait_crawl = []
 wait_write = []
 
 need_validate = False
 single_time_crawled = 0
+
+
+# 写回数据库
+def write_back():
+    update_list = []
+    insert_list = []
+
+    for item in wait_write:
+        flag, unique, name, level, crawled_date, has_error = item
+
+        if flag == 0:
+            update_list.append((crawled_date, has_error, unique))
+        elif flag == 1:
+            insert_list.append((unique, name, level))
+    
+    wait_write.clear()
+
+    if update_list:
+        sql = """UPDATE crawl 
+            SET `crawled_date` = %s, `has_error` = %s
+            WHERE `unique` = %s"""
+        try:
+            conn.ping()
+            execute_num = cursor.executemany(sql, update_list)
+            conn.commit()
+            logger1.info('Update %d rows' % execute_num)
+        except pymysql.DatabaseError as e:
+            conn.rollback()
+            logger1.error('Update error')
+            logger1.exception(e)
+    
+    if insert_list:
+        sql = """INSERT IGNORE crawl (`unique`, `name`, `level`)
+            VALUES (%s, %s, %s)"""
+        try:
+            conn.ping()
+            execute_num = cursor.executemany(sql, insert_list)
+            conn.commit()
+            logger1.info('Insert %d rows' % execute_num)
+        except pymysql.DatabaseError:
+            conn.rollback()
+            logger1.error('Insert error')
+            logger1.exception(e)
+
+
+# 退出函数
+def finish():
+    write_back()
+
+    cursor.close()
+    conn.close()
+
+    logger1.info('Single time crawled: {}'.format(single_time_crawled))
+    logger1.info('=====Main Thread End=====\n')
+
+    for h in logger1.handlers:
+        h.close()
+        logger1.removeHandler(h)
+
+    exit()
 
 
 # 根据爬取人id生成尾号列表，8返回全部尾号列表
@@ -107,8 +186,6 @@ def generate_tail(crawler_id):
 
         return result
 
-# 爬取有效期为 30 天
-limit_date = datetime.date.today() - datetime.timedelta(days=30)
 
 # 根据爬取人id生成 unique尾号
 tail = generate_tail(crawler_id)
@@ -131,30 +208,25 @@ while not need_validate:
         logger1.error('Get wait crawl data error')
         logger1.exception(e)
 
-        cursor.close()
-        conn.close()
-        exit()
+        finish()
     
     result = cursor.fetchall()
 
     if result:
-        for row in result:
-            unique = row[0]
-            name = row[1]
-            level = row[2]
-
-            wait_crawl.append((unique, name, level))
-
+        wait_crawl = list(result)
         logger1.info('Put %d to wait_crawl' % len(wait_crawl))
 
     else:
         logger1.info('No data need crawl in database')
-        cursor.close()
-        conn.close()
-        exit()
+        
+        finish()
 
     # 爬取数据
     for item in wait_crawl:
+        # 检查是否终止程序
+        if stop:
+            finish()
+        
         unique, name, level = item
         logger1.info('Crawling (%s)' % name)
 
@@ -164,7 +236,7 @@ while not need_validate:
         proxy = None
 
         # 加入延时
-        # time.sleep(random.uniform(1, 2))
+        time.sleep(random.uniform(crawl_delay, crawl_delay + 3))
 
         try:
             qichacha, html = crawl_from_qichacha(name, url, proxy)
@@ -191,6 +263,8 @@ while not need_validate:
             
         # 爬虫出现错误
         except Exception as e:
+            single_time_crawled += 1
+
             logger1.error('!! Crawl (%s, %s) error' % (name, url))
             logger1.exception(e)
 
@@ -205,12 +279,12 @@ while not need_validate:
             wait_write_item = (flag, unique, name, level, crawled_date, has_error)
             wait_write.append(wait_write_item)
 
-            single_time_crawled += 1
-
             continue
 
         # 没有错误
         else:
+            single_time_crawled += 1
+
             logger1.info('Crawled  (%s)' % name)
 
             flag = 0
@@ -229,11 +303,7 @@ while not need_validate:
                     logger1.error('Crawl stock %s error' % qichacha['overview']['stock_code'])
                     logger1.exception(e)
 
-            # 更新该公司的 crawled_date 和 has_error
-            wait_write_item = (flag, unique, name, level, crawled_date, has_error)
-            wait_write.append(wait_write_item)
-
-            # 将爬取结果入库
+            # 爬取结果文档
             document = {
                 'unique': unique,
                 'company': qichacha['companyName'],
@@ -244,7 +314,29 @@ while not need_validate:
                 'crawl_time': str(datetime.date.today()),
                 'store_time': ''
             }
-            mongo_collection.insert_one(document)
+
+            # mongodb插入数据尝试三次
+            mongodb_error = True
+            for i in range(3):
+                try:
+                    mongo_collection.insert_one(document)
+                    mongodb_error = False
+                    break
+                except pymongo.errors.AutoReconnect:
+                    logger1.warning('MongoDB reconnect %d time, wait 1s' % i+1)
+                    time.sleep(1)
+                except Exception as e:
+                    logger1.error('MongoDB insert (%s) error' % name)
+                    logger1.exception(e)
+                    break
+            
+            # 如果插入mongodb时出错，则放弃此公司
+            if mongodb_error:
+                continue
+
+            # 更新该公司的 crawled_date 和 has_error
+            wait_write_item = (flag, unique, name, level, crawled_date, has_error)
+            wait_write.append(wait_write_item)
 
             # 根据该公司 level 将 holders 或 investments 加入待写队列
 
@@ -319,57 +411,9 @@ while not need_validate:
                 # 不需要处理 holders 或 investments
                 pass
 
-            single_time_crawled += 1
 
     # 写回数据库
-    update_list = []
-    insert_list = []
-
-    for item in wait_write:
-        flag, unique, name, level, crawled_date, has_error = item
-
-        if flag == 0:
-            update_list.append((crawled_date, has_error, unique))
-        elif flag == 1:
-            insert_list.append((unique, name, level))
-    
-    wait_write.clear()
-
-    if update_list:
-        sql = """UPDATE crawl 
-            SET `crawled_date` = %s, `has_error` = %s
-            WHERE `unique` = %s"""
-        try:
-            conn.ping()
-            execute_num = cursor.executemany(sql, update_list)
-            conn.commit()
-            logger1.info('Update %d rows' % execute_num)
-        except pymysql.DatabaseError as e:
-            conn.rollback()
-            logger1.error('Update error')
-            logger1.exception(e)
-    
-    if insert_list:
-        sql = """INSERT IGNORE crawl (`unique`, `name`, `level`)
-            VALUES (%s, %s, %s)"""
-        try:
-            conn.ping()
-            execute_num = cursor.executemany(sql, insert_list)
-            conn.commit()
-            logger1.info('Insert %d rows' % execute_num)
-        except pymysql.DatabaseError:
-            conn.rollback()
-            logger1.error('Insert error')
-            logger1.exception(e)
+    write_back()
 
 
-# 清理
-cursor.close()
-conn.close()
-
-logger1.info('Single time crawled: {}'.format(single_time_crawled))
-logger1.info('=====Main Thread End=====\n')
-
-for h in logger1.handlers:
-    h.close()
-    logger1.removeHandler(h)
+finish()

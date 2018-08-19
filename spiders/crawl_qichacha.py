@@ -420,8 +420,8 @@ def crawl_from_qichacha(name, url, proxy_dict={}):
 
 
 if __name__ == '__main__':
-    name = '阿里巴巴(中国)网络技术有限公司'
-    url = 'https://www.qichacha.com/firm_c70a55cb048c8e4db7bca357a2c113e0.html'
+    name = '鹤壁市金力投资管理有限公司'
+    url = 'https://www.qichacha.com/firm_8155261c75f609973b90589660e69a80.html'
     proxy_dict = {'http': '', 'https': ''}
 
     qichacha, html = crawl_from_qichacha(name, url, proxy_dict)
