@@ -25,14 +25,14 @@ def convert_to_number(string):
     m = pattern.match(string)
 
     if m:
-        number = m.group(1)
+        number = float(m.group(1))
         unit = m.group(3)
 
         if unit:
             if unit.find('亿') != -1:
-                number = float(number) * 100000000
+                number = number * 100000000
             elif unit.find('万') != -1:
-                number = float(number) * 10000
+                number = number * 10000
 
         return number
 

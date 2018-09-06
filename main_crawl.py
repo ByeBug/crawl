@@ -28,9 +28,14 @@ from spiders.crawl_qichacha import NeedValidationError, crawl_from_qichacha
 from spiders.crawl_stock import crawl_stock
 
 
-# 设置环境
+# 读取个人配置
+if not os.path.isfile('myconfig.cfg'):
+    print("myconfig.cfg doesn't exist.")
+    print('Please copy default.cfg to myconfig.cfg and change the content.')
+    exit()
+
 config = configparser.RawConfigParser()
-config.read('config.cfg', encoding='utf-8')
+config.read('myconfig.cfg', encoding='utf-8')
 
 log_path = config['crawl']['log_path']
 log_path = os.path.join(log_path, str(datetime.date.today()))
@@ -104,8 +109,9 @@ crawler_id = int(config['qichacha']['crawler_id'])
 # 爬取延迟
 crawl_delay = int(config['crawl']['delay'])
 
-# 爬取有效期为 30 天
-limit_date = datetime.date.today() - datetime.timedelta(days=30)
+# 爬取有效期
+expired = int(config['crawl']['expired'])
+limit_date = datetime.date.today() - datetime.timedelta(days=expired)
 
 wait_crawl = []
 wait_write = []
@@ -197,10 +203,10 @@ while not need_validate:
     # 获取待爬数据
     wait_crawl.clear()
 
-    sql = """select `unique`, `name`, `level` from crawl 
-        where crawled_date < %s
-        and right(`unique`, 1) in %s
-        order by level limit 100"""
+    sql = """SELECT `unique`, `name`, `level` FROM crawl 
+        WHERE crawled_date < %s
+        AND right(`unique`, 1) IN %s
+        ORDER BY level LIMIT 100"""
     try:
         conn.ping()
         cursor.execute(sql, (limit_date, tail))
@@ -319,11 +325,11 @@ while not need_validate:
             mongodb_error = True
             for i in range(3):
                 try:
-                    mongo_collection.insert_one(document)
+                    mongo_collection.replace_one({'unique': unique}, document, upsert=True)
                     mongodb_error = False
                     break
                 except pymongo.errors.AutoReconnect:
-                    logger1.warning('MongoDB reconnect %d time, wait 1s' % i+1)
+                    logger1.warning('MongoDB reconnect {} time, wait 1s'.format(i+1))
                     time.sleep(1)
                 except Exception as e:
                     logger1.error('MongoDB insert (%s) error' % name)

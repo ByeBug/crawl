@@ -54,7 +54,7 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     money = eastmoney_data['survey']['base_info']['zczb']   # double
     estab_time = eastmoney_data['survey']['about_issue']['clrq']    # date
     reg_address = eastmoney_data['survey']['base_info']['zcdz']
-    busin_scope = eastmoney_data['survey']['base_info']['jyfw']
+    busin_scope = eastmoney_data['survey']['base_info']['jyfw'][:1000]
     sfc = eastmoney_data['survey']['base_info']['sszjhhy']  # char(4)
     phone = eastmoney_data['survey']['base_info']['lxdh']
     email = eastmoney_data['survey']['base_info']['dzxx']
@@ -179,7 +179,7 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     for investment in data['investments']:
         i_id = re.search(r'firm_(\w+).html', investment['url']).group(1)
         name = investment['name']
-        capital = investment['registered_capital']
+        capital = investment['registered_capital'].replace(' ', '')
         count = ''
         rate = investment['invest_proportion']
         time = investment['registered_time']
@@ -225,14 +225,16 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     # 变更信息表 c_changeinfo
     changeinfos = []
     for changeinfo in data['changeInfos']:
+        if len(changeinfo['before']) > 2000 or len(changeinfo['after']) > 2000:
+            continue
         time = changeinfo['time']
         item = changeinfo['item']
         before = change_changeinfo(changeinfo['before'])
         after = change_changeinfo(changeinfo['after'])
 
-        changeinfos.append(c_id, time, item, before, after)
+        changeinfos.append((c_id, time, item, before, after))
 
-    sql = """insert into c_changeinfo (c_id, time, item, before, after)
+    sql = """insert into c_changeinfo (`c_id`, `time`, `item`, `before`, `after`)
     values (%s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, changeinfos)
@@ -282,7 +284,7 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     # 新发    
     issue_type = '新发'
     issue_date = eastmoney_data['survey']['about_issue']['wsfxrq']
-    issue_price = eastmoney_data['survey']['about_issue']['mgfxj']
+    issue_price = convert_to_number(eastmoney_data['survey']['about_issue']['mgfxj'])
     issue_count = convert_to_number(eastmoney_data['survey']['about_issue']['fxl']) / 10000
     raise_funds = convert_to_number(eastmoney_data['survey']['about_issue']['mjzjje']) / 10000
     issue_way = eastmoney_data['survey']['about_issue']['fxfs']
@@ -299,9 +301,9 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     for add_detail in eastmoney_data['add_details']:
         issue_type = '增发'
         issue_date = convert_to_date(add_detail['add_date'])
-        issue_price = add_detail['add_price']
-        issue_count = add_detail['act_num_of_add']
-        raise_funds = add_detail['act_add_net_raise']
+        issue_price = convert_to_number(add_detail['add_price'])
+        issue_count = convert_to_number(add_detail['act_num_of_add'])
+        raise_funds = convert_to_number(add_detail['act_add_net_raise'])
         issue_way = add_detail['issue_means']
         equity_registration_date = convert_to_date(add_detail['record_date'])
         additional_listing_date = convert_to_date(add_detail['sec_offer_date'])
@@ -317,9 +319,9 @@ def store_listed_company(qichacha, eastmoney, cninfo, conn, cursor):
     for allot_detail in eastmoney_data['allot_details']:
         issue_type = '配股'
         issue_date = convert_to_date(allot_detail['allot_date'])
-        issue_price = allot_detail['allot_price']
-        issue_count = allot_detail['act_num_of_allot']
-        raise_funds = allot_detail['act_allot_net_raise']
+        issue_price = convert_to_number(allot_detail['allot_price'])
+        issue_count = convert_to_number(allot_detail['act_num_of_allot'])
+        raise_funds = convert_to_number(allot_detail['act_allot_net_raise'])
         issue_way = ''
         equity_registration_date = convert_to_date(allot_detail['allot_date'])
         additional_listing_date = ''
@@ -712,7 +714,7 @@ def store_not_listed_company(qichacha, conn, cursor):
     money = data['baseInfo']['registered_capital']
     estab_time = data['baseInfo']['registered_time']
     reg_address = data['baseInfo']['registered_address']
-    busin_scope = data['baseInfo']['business_scope']
+    busin_scope = data['baseInfo']['business_scope'][:1000]
     sfc = data['baseInfo']['industry']  # char(4)
     phone = data['overview']['phone']
     email = data['overview']['email']
@@ -763,7 +765,7 @@ def store_not_listed_company(qichacha, conn, cursor):
     for investment in data['investments']:
         i_id = re.search(r'firm_(\w+).html', investment['url']).group(1)
         name = investment['name']
-        capital = investment['registered_capital']
+        capital = investment['registered_capital'].replace(' ', '')
         count = ''
         rate = investment['invest_proportion']
         time = investment['registered_time']
@@ -804,14 +806,16 @@ def store_not_listed_company(qichacha, conn, cursor):
     # 变更信息表 c_changeinfo
     changeinfos = []
     for changeinfo in data['changeInfos']:
+        if len(changeinfo['before']) > 2000 or len(changeinfo['after']) > 2000:
+            continue
         time = changeinfo['time']
         item = changeinfo['item']
         before = change_changeinfo(changeinfo['before'])
         after = change_changeinfo(changeinfo['after'])
 
-        changeinfos.append(c_id, time, item, before, after)
+        changeinfos.append((c_id, time, item, before, after))
 
-    sql = """insert into c_changeinfo (c_id, time, item, before, after)
+    sql = """insert into c_changeinfo (`c_id`, `time`, `item`, `before`, `after`)
     values (%s, %s, %s, %s, %s)"""
 
     cursor.executemany(sql, changeinfos)
@@ -835,31 +839,47 @@ def store(qichacha, eastmoney, cninfo, conn, cursor):
                 store_listed_company(qichacha, eastmoney, cninfo, conn, cursor)
             else:
                 store_not_listed_company(qichacha, conn, cursor)
-        except pymysql.DatabaseError as e:
+        except Exception as e:
             conn.rollback()
             raise e
 
 
 if __name__ == '__main__':
+    if not os.path.isfile('myconfig.cfg'):
+        print("myconfig.cfg doesn't exist")
+        exit()
+
     config = configparser.RawConfigParser()
-    config.read('config.cfg', encoding='utf-8')
+    config.read('myconfig.cfg', encoding='utf-8')
 
-    store_db_host = config['store_db']['host']
-    store_db_port = config['store_db']['port']
-    store_db_user = config['store_db']['user']
-    store_db_passwd = config['store_db']['passwd']
-    store_db_db = config['store_db']['db']
-    conn = pymysql.connect(host=store_db_host, port=int(store_db_port), 
-                            user=store_db_user, passwd=store_db_passwd, 
-                            db=store_db_db, charset='utf8')
-    cursor = conn.cursor()
+    try:
+        store_db_host = config['store_db']['host']
+        store_db_port = config['store_db']['port']
+        store_db_user = config['store_db']['user']
+        store_db_passwd = config['store_db']['passwd']
+        store_db_db = config['store_db']['db']
+        conn = pymysql.connect(host=store_db_host, port=int(store_db_port), 
+                                user=store_db_user, passwd=store_db_passwd, 
+                                db=store_db_db, charset='utf8')
+        cursor = conn.cursor()
+    except Exception as e:
+        print('Connect to store_db failed')
+        print(e)
+        exit()
 
-    crawl_mongodb_host = config['crawl_mongodb']['host']
-    crawl_mongodb_port = config['crawl_mongodb']['port']
-    crawl_mongodb_db = config['crawl_mongodb']['db']
-    crawl_mongodb_col = config['crawl_mongodb']['collection']
-    mongo_client = pymongo.MongoClient(host=crawl_mongodb_host, port=int(crawl_mongodb_port))
-    mongo_collection = mongo_client[crawl_mongodb_db][crawl_mongodb_col]
+    try:
+        crawl_mongodb_host = config['crawl_mongodb']['host']
+        crawl_mongodb_port = config['crawl_mongodb']['port']
+        crawl_mongodb_db = config['crawl_mongodb']['db']
+        crawl_mongodb_col = config['crawl_mongodb']['collection']
+        mongo_client = pymongo.MongoClient(host=crawl_mongodb_host, port=int(crawl_mongodb_port))
+        mongo_collection = mongo_client[crawl_mongodb_db][crawl_mongodb_col]
+    except Exception as e:
+        print('Connect to crawl_mongodb failed')
+        print(e)
+        cursor.close()
+        conn.close()
+        exit()
 
     item = mongo_collection.find_one({'store_time': '', 'eastmoney': ''}, {'qichacha': 1, 'eastmoney': 1, 'cninfo': 1})
 

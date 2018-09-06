@@ -4,8 +4,4 @@ __pycache__/
 
 database/
 
-html/
-
-json/
-
-log/
+myconfig.cfg

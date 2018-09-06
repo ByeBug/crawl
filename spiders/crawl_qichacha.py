@@ -99,7 +99,7 @@ def init_qichacha():
 
 def get_config():
     config = configparser.RawConfigParser()
-    config.read('config.cfg', encoding='utf-8')
+    config.read('myconfig.cfg', encoding='utf-8')
 
     user_agent = config['crawl']['user_agent']
     user = config['qichacha']['user']
@@ -273,7 +273,7 @@ def get_detail(url, r, s, user, cookies, headers, proxy_dict = {}):
                 investment['legal_person'] = tds[1].a.string.strip()
             except:
                 investment['legal_person'] = ''
-            investment['registered_capital'] = tds[2].string.strip()
+            investment['registered_capital'] = tds[2].string.strip().replace(' ', '')
             investment['invest_proportion'] = tds[3].string.strip()
             investment['registered_time'] = tds[4].string.strip()
             investment['company_status'] = tds[5].span.string.strip()
@@ -308,7 +308,7 @@ def get_detail(url, r, s, user, cookies, headers, proxy_dict = {}):
                         investment['legal_person'] = tds[1].a.string.strip()
                     except:
                         investment['legal_person'] = ''
-                    investment['registered_capital'] = tds[2].string.strip()
+                    investment['registered_capital'] = tds[2].string.strip().replace(' ', '')
                     investment['invest_proportion'] = tds[3].string.strip()
                     investment['registered_time'] = tds[4].string.strip()
                     investment['company_status'] = tds[5].span.string.strip()
