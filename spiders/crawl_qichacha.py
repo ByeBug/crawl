@@ -138,6 +138,9 @@ def search_company(name, user, cookies, headers, proxy_dict = {}):
         if s.script.string.find('var arg1=') != -1:
             raise NeedValidationError('Need Browser Open url: ' + r.url)
 
+    if str(s.select('header ul > li')).find('注册') != -1:
+        raise NotLoginError()
+        
     if str(s.select('header ul > li')[7]).find(user) == -1:
         raise NotLoginError()
 
@@ -169,6 +172,9 @@ def get_detail(url, r, s, user, cookies, headers, proxy_dict = {}):
         if s.script.string:
             if s.script.string.find('var arg1=') != -1:
                 raise NeedValidationError('Need Browser Open url: ' + r.url)
+
+        if str(s.select('header ul > li')).find('注册') != -1:
+            raise NotLoginError()
 
         if str(s.select('header ul > li')[7]).find(user) == -1:
             raise NotLoginError()
@@ -376,6 +382,9 @@ def crawl_from_qichacha(name, url, proxy_dict={}):
         if s.script.string.find('var arg1=') != -1:
             raise NeedValidationError('Need Browser Open url: ' + r.url)
 
+    if str(s.select('header ul > li')).find('注册') != -1:
+        raise NotLoginError()
+    
     if str(s.select('header ul > li')[7]).find(user) == -1:
         raise NotLoginError()
 

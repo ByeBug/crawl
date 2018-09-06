@@ -24,7 +24,7 @@ import signal
 import pymysql
 import pymongo
 
-from spiders.crawl_qichacha import NeedValidationError, crawl_from_qichacha
+from spiders.crawl_qichacha import NotLoginError, NeedValidationError, crawl_from_qichacha
 from spiders.crawl_stock import crawl_stock
 
 
@@ -246,6 +246,11 @@ while not need_validate:
 
         try:
             qichacha, html = crawl_from_qichacha(name, url, proxy)
+
+        # 出现未登录错误
+        except NotLoginError as e:
+            logger1.error('Not Login, Please reset cookie')
+            finish()
 
         # 出现验证错误
         except NeedValidationError as e:
